@@ -684,10 +684,172 @@ tab
 
 ```
 
-# Walk from 2018 to 2017
+# Walk from 2017 to 2018, using diffs from 2018
 
 ```{r}
+# what i want is a table with total liability in 2018 by income range, then change from policy 1, change from policy 2, ...,
+# ...., synergy, 2017 law```{r ONETIME_long}
 
+pid_stubs <- read_parquet(paste0(tcout, tc2017), 
+                         col_select = all_of(c("pid", "c00100"))) %>%
+  mutate(agi_stub=get_stub(c00100, agi_bounds))
+
+keepvars <- c("pid", "iitax")
+
+getsums <- function(fname, pname){
+  df <- read_parquet(paste0(tcout, fname),
+                         col_select = all_of(keepvars)) %>%
+    mutate(policy=pname) %>%
+    left_join(pid_stubs %>% select(pid, agi_stub), by="pid") %>%
+    left_join(weights_long, by="pid")
+  df2 <- df %>%
+    group_by(agi_stub, stabbr, policy) %>%
+    summarise(iitax=sum(weight * iitax), .groups="drop")
+  return(df2)
+}
+
+dfall <- bind_rows(getsums(tc2017, "law2017"),
+                   getsums(tc2018xSALT, "law2018_xSALT"),
+                   getsums(tc2018_SD2017, "law2018_SD2017"),
+                   getsums(tc2018_SALTSD2017, "law2018_SALTSD2017"),
+                   getsums(tc2018, "law2018"))
+                   
+# dfall <- dfall %>%
+#   left_join(agistubs %>% select(agi_stub, agi_label),
+#             by="agi_stub")
+
+dfsums <- dfall %>%
+  group_by(policy, stabbr) %>%
+  summarise(across(.cols=-agi_stub, ~sum(.x)), .groups="drop") %>%
+  mutate(agi_stub=99)
+
+dfallsums <- bind_rows(dfall, dfsums) %>%
+  left_join(agistubs %>% select(-c(agi_ge, agi_lt)), by="agi_stub") %>%
+  left_join(stcodes %>% select(stabbr, stname), by="stabbr") %>%
+  mutate(stname=ifelse(stabbr=="other", "Other states", stname)) %>%
+  arrange(policy, stabbr, agi_stub) %>%
+  select(policy, stabbr, stname, agi_stub, agi_label, everything())
+
+# define the order desired
+order <- c("law2017", "law2018_xSALT", "law2018_SD2017", "law2018")
+dfwide <- dfallsums %>%
+  filter(policy != "law2018_SALTSD2017") %>%
+  mutate(policy=factor(policy, levels = order)) %>%
+  pivot_wider(names_from = policy, values_from = iitax)
+
+data <- dfwide %>%
+  filter(stabbr=="NY") %>%
+  mutate(totchange=law2018 - law2017,
+         saltchange=law2018 - law2018_xSALT,
+         sdchange=law2018 - law2018_SD2017,
+         other=totchange - (saltchange + sdchange)) %>%
+  arrange(agi_stub) %>%
+  select(agi_label, law2017, sdchange, saltchange, other, totchange, law2018)
+
+data %>%
+  kable(format.args = list(big.mark=","))
+
+
+```
+
+```{r}
+xwalk_table <- function(data, tab_title, tab_subtitle){
+  data %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      agi_label = "Adjusted gross income"
+    ) %>%
+    fmt_percent(
+      columns=2:ncol(data),
+      scale_values = FALSE,
+      decimals = 1
+    ) %>% 
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+    tab_source_note(source_note)
+}
+
+tab_title <- "xwalk table"
+tab_subtitle <- "$ billions"
+dollar_decimal <- 1
+dollar_scale <- 1e-9
+# law2017	sdchange	saltchange	other	law2018	totchange
+
+tab <- data %>%
+    gt() %>%  
+      # cols_move(
+      #   columns = vars(totchange),
+      #   after = vars(law2018)
+      #   ) %>%
+    tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      agi_label = "Adjusted gross income",
+      law2017 = html("2017 law"),
+      sdchange = html("Standard<br>deduction"),
+      saltchange = html("SALT cap"),
+      other = html("Other<br>changes"),
+      law2018 = html("2018 law"),
+      totchange = html("Total<br>change")
+    ) %>%
+    tab_spanner(
+      label = "Tax change, measured in isolation relative to 2018 law, attributable to:",
+      columns = vars(sdchange, saltchange, other)
+    ) %>%
+    tab_style(
+      style = list(
+        cell_borders(sides = "right", color = "#000000", style = "solid", weight = px(0.5))
+      ),
+      locations =list(
+        cells_body(columns = vars(law2017, totchange)),
+        cells_column_labels(columns = vars(law2017, totchange))
+      )
+    ) %>%
+    tab_style(
+      style = list(
+        cell_borders(sides = "left", color = "#000000", style = "solid", weight = px(0.5))
+      ),
+      locations =list(
+        cells_body(columns = vars(totchange)),
+        cells_column_labels(columns = vars(totchange))
+      )
+    ) %>%    
+    fmt_currency(
+      columns = one_of(setdiff(names(data), "agi_label")),
+      rows=1,
+      decimals = dollar_decimal,
+      scale_by = dollar_scale,
+      suffixing = FALSE
+    ) %>%
+    fmt_number(
+      columns = one_of(setdiff(names(data), "agi_label")),
+      rows=2:nrow(data),
+      decimals = dollar_decimal,
+      scale_by = dollar_scale,
+      suffixing = FALSE
+    ) %>%
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+    tab_source_note(source_note)
+
+gtsave(tab, "2017to2018_xwalk.png", path = here::here("results"))
 
 
 ```
