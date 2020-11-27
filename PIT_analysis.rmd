@@ -422,14 +422,16 @@ allsums_wide <- allsums %>%
 # Begin analysis
 ## Change from 2017 law to 2018 law
 
-```{r 2018vs2017_summary, rows.print=20}
-
+```{r}
 policy1 <- "law2017"
 p1name <- "2017 law"
 
 policy2 <- "law2018"
 p2name <- "2018 law"
+```
 
+
+```{r 2018vs2017_summary, rows.print=20}
 tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 law"
 tab_subtitle <- "Amounts are in billions of 2018 dollars"
 
@@ -450,12 +452,6 @@ tab
 
 ```{r 2018vs2017_one_state_byagi}
 
-policy1 <- "law2017"
-p1name <- "2017 law"
-
-policy2 <- "law2018"
-p2name <- "2018 law"
-
 dollars <- "millions"
 
 for(st in nyus_sort){
@@ -470,9 +466,6 @@ for(st in nyus_sort){
 
 
 ```{r 2018vs2017_pdiff_byagi_wide, rows.print=20}
-
-policy1 <- "law2017"
-policy2 <- "law2018"
 
 tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 tax law"
 tab_subtitle <- "Percent change from 2017 law to 2018 law"
@@ -495,13 +488,17 @@ tab
 
 ## Impact of uncapped SALT vs. 2018 law
 
-```{r 2018xsalt_summary, rows.print=20}
-
+```{r}
 policy1 <- "law2018"
 p1name <- "2018 law"
 
 policy2 <- "law2018_xSALT"
 p2name <- "2018 law with SALT uncapped"
+
+```
+
+
+```{r 2018vsSALT2017_summary, rows.print=20}
 
 tab_title <- "Total federal income tax liability: 2018 law, and 2018 law with SALT uncapped"
 tab_subtitle <- "Amounts are in billions of 2018 dollars"
@@ -514,27 +511,21 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
   select(stname, policy1, policy2, diff, pdiff)
 
 tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
-gtsave(tab, "2018xsalt_summary_table.png", path = here::here("results"))
+gtsave(tab, "2018vsSALT2017_summary_table.png", path = here::here("results"))
 
 tab
 
 ```
 
 
-```{r 2018xsalt_one_state_byagi}
-
-policy1 <- "law2018"
-p1name <- "2018 law"
-
-policy2 <- "law2018_xSALT"
-p2name <- "2018 law with SALT uncapped"
+```{r 2018vsSALT2017_one_state_byagi}
 
 dollars <- "millions"
 
-for(st in nyus_sort){
+for(st in c("US", "NY")){  # nyus_sort
   print(st)
   tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
-  gtsave(tab, paste0("2018xSALT_byagi_table_", st, ".png"), path = here::here("results"))
+  gtsave(tab, paste0("2018vsSALT2017_byagi_table_", st, ".png"), path = here::here("results"))
   # print(tab)
 }
 
@@ -542,10 +533,7 @@ for(st in nyus_sort){
 ```
 
 
-```{r 2018xsalt_pdiff_wide, rows.print=20}
-
-policy1 <- "law2018"
-policy2 <- "law2018_xSALT"
+```{r 2018vsSALT2017_pdiff_byagi_wide, rows.print=20}
 
 tab_title <- "Total federal income tax liability: 2018 law, and 2018 law with SALT uncapped"
 tab_subtitle <- "Percent change from 2018 law to 2018 law with SALT uncapped"
@@ -559,7 +547,7 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
 
 tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
 
-gtsave(tab, "2018xsalt_pdiff_byagi_wide_table.png", path = here::here("results"))
+gtsave(tab, "2018vsSALT2017_pdiff_byagi_wide_table.png", path = here::here("results"))
 tab
 
 
@@ -567,13 +555,17 @@ tab
 
 
 ## Impact of the standard deduction increase, relative to TCJA
-```{r SD_summary_allstates}
 
+```{r}
 policy1 <- "law2018"
 p1name <- "2018 law"
 
 policy2 <- "law2018_SD2017"
 p2name <- "2018 law without standard deduction increase"
+```
+
+
+```{r 2018vsSD2017_summary_allstates}
 
 tab_title <- "Total federal income tax liability in 2018: 2018 law, and 2018 law without standard deduction increase"
 tab_subtitle <- "Amounts are in billions of 2018 dollars"
@@ -585,27 +577,21 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
   arrange(stabbr) %>%
   select(stname, policy1, policy2, diff, pdiff)
 
-sd_tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
-gtsave(sd_tab, "sd_allstates_table.png", path = here::here("results"))
+tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
+gtsave(tab, "2018vsSD2017_summary_table.png", path = here::here("results"))
+tab
 
-sd_tab
 ```
 
 
-```{r sd_one_state_byagi}
-
-policy1 <- "law2018"
-p1name <- "2018 law"
-
-policy2 <- "law2018_SD2017"
-p2name <- "2018 law without standard deduction increase"
+```{r 2018vsSD2017_one_state_byagi}
 
 dollars <- "millions"
 
-for(st in nyus_sort){
+for(st in c("US", "NY")){  # nyus_sort
   print(st)
   tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
-  gtsave(tab, paste0("sd_byagi_table_", st, ".png"), path = here::here("results"))
+  gtsave(tab, paste0("2018vsSD2017_byagi_table_", st, ".png"), path = here::here("results"))
   # print(tab)
 }
 
@@ -613,10 +599,7 @@ for(st in nyus_sort){
 ```
 
 
-```{r sd_wide}
-
-policy1 <- "law2018"
-policy2 <- "law2018_SD2017"
+```{r 2018vsSD2017_pdiff_byagi_wide}
 
 tab_title <- "Total federal income tax liability in 2018: 2018 tax law, and 2018 law without standard deduction increase"
 tab_subtitle <- "Percent change from 2018 law to 2018 law without standard deduction increase"
@@ -628,14 +611,13 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
   select(agi_label, stname, pdiff) %>%
   pivot_wider(names_from = stname, values_from = pdiff)
 
-wide_sd_tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
-
-gtsave(wide_sd_tab, "wide_sd_pdiff_byagi_allstates_table.png", path = here::here("results"))
-wide_sd_tab
+tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
+gtsave(tab, "2018vsSD2017_pdiff_byagi_wide_table.png", path = here::here("results"))
+tab
 
 ```
 
-## Impact of standard deduction combined
+## Impact of standard deduction combined with uncapped SALT, vs 2018
 
 ```{r}
 policy1 <- "law2018"
@@ -644,13 +626,13 @@ p1name <- "2018 law"
 policy2 <- "law2018_SALTSD2017"
 p2name <- "2018 law with 2017 SALT and standard deduction"
 
+tab_title <- "Total federal income tax liability in 2018: 2018 law with and without SALT and SD"
+
 ```
 
 
-```{r sdsalt_summary_allstates, rows.print=20}
-
-
-tab_title <- "Total federal income tax liability in 2018: 2018 law with and without SALT and SD"
+```{r 2018vsSALTSD2017_summary, rows.print=20}
+# Don't forget to update policies and names!!!
 tab_subtitle <- "Amounts are in billions of 2018 dollars"
 
 data <- pol_change(allsums_wide, policy1, policy2) %>%
@@ -661,21 +643,20 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
   select(stname, policy1, policy2, diff, pdiff)
 
 tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
-gtsave(tab, "sdsalt_allstates_table.png", path = here::here("results"))
-
+gtsave(tab, "2018vsSALTSD2017_summary_table.png", path = here::here("results"))
 tab
 
 ```
 
 
-```{r sdsalt_one_state_byagi}
+```{r 2018vsSALTSD2017_one_state_byagi}
 
 dollars <- "millions"
 
-for(st in nyus_sort){
+for(st in c("US", "NY")){  # nyus_sort
   print(st)
   tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
-  gtsave(tab, paste0("sdsalt_byagi_table_", st, ".png"), path = here::here("results"))
+  gtsave(tab, paste0("2018vsSALTSD2017_byagi_table_", st, ".png"), path = here::here("results"))
   # print(tab)
 }
 
@@ -684,10 +665,9 @@ for(st in nyus_sort){
 
 
 
-```{r sdsalt_wide, rows.print=20}
+```{r 2018vsSALTSD2017_pdiff_byagi_wide, rows.print=20}
 
-tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 tax law"
-tab_subtitle <- "Percent change from 2017 law to 2018 law"
+tab_subtitle <- "Percent change from 2018 law to 2018 law without SALT and SD"
 
 data <- pol_change(allsums_wide, policy1, policy2) %>%
   select(all_of(idvars), agi_stub, agi_label, stname, pdiff) %>%
@@ -697,11 +677,18 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
   pivot_wider(names_from = stname, values_from = pdiff)
 
 
-iitwide_tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
+tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
 
-gtsave(iitwide_tab, "iitpdiff_byagi_allstates_table.png", path = here::here("results"))
-iitwide_tab
+gtsave(tab, "2018vsSALTSD2017_pdiff_byagi_wide_table.png", path = here::here("results"))
+tab
 
 ```
 
+# Walk from 2018 to 2017
+
+```{r}
+
+
+
+```
 
