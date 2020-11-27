@@ -422,7 +422,7 @@ allsums_wide <- allsums %>%
 # Begin analysis
 ## Change from 2017 law to 2018 law
 
-```{r iit_summary_allstates, rows.print=20}
+```{r 2018vs2017_summary, rows.print=20}
 
 policy1 <- "law2017"
 p1name <- "2017 law"
@@ -440,14 +440,15 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
   arrange(stabbr) %>%
   select(stname, policy1, policy2, diff, pdiff)
 
-iit_tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
-gtsave(iit_tab, "iit_allstates_table.png", path = here::here("results"))
+tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
+gtsave(tab, "2018vs2017_summary_table.png", path = here::here("results"))
 
-iit_tab
+tab
 
 ```
 
-```{r iit_one_state_byagi}
+
+```{r 2018vs2017_one_state_byagi}
 
 policy1 <- "law2017"
 p1name <- "2017 law"
@@ -460,7 +461,7 @@ dollars <- "millions"
 for(st in nyus_sort){
   print(st)
   tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
-  gtsave(tab, paste0("iit_byagi_table_", st, ".png"), path = here::here("results"))
+  gtsave(tab, paste0("2018vs2017_byagi_table_", st, ".png"), path = here::here("results"))
   # print(tab)
 }
 
@@ -468,8 +469,7 @@ for(st in nyus_sort){
 ```
 
 
-
-```{r iit_wide, rows.print=20}
+```{r 2018vs2017_pdiff_byagi_wide, rows.print=20}
 
 policy1 <- "law2017"
 policy2 <- "law2018"
@@ -485,17 +485,17 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
   pivot_wider(names_from = stname, values_from = pdiff)
 
 
-iitwide_tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
+tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
 
-gtsave(iitwide_tab, "iitpdiff_byagi_allstates_table.png", path = here::here("results"))
-iitwide_tab
+gtsave(tab, "2018vs2017_pdiff_byagi_wide_table.png", path = here::here("results"))
+tab
 
 ```
 
 
-## Impact of the SALT cap
+## Impact of uncapped SALT vs. 2018 law
 
-```{r salt_summary_allstates, rows.print=20}
+```{r 2018xsalt_summary, rows.print=20}
 
 policy1 <- "law2018"
 p1name <- "2018 law"
@@ -513,15 +513,15 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
   arrange(stabbr) %>%
   select(stname, policy1, policy2, diff, pdiff)
 
-iitxsalt_tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
-gtsave(iitxsalt_tab, "iitxsalt_table.png", path = here::here("results"))
+tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
+gtsave(tab, "2018xsalt_summary_table.png", path = here::here("results"))
 
-iitxsalt_tab
+tab
 
 ```
 
 
-```{r salt_one_state_byagi}
+```{r 2018xsalt_one_state_byagi}
 
 policy1 <- "law2018"
 p1name <- "2018 law"
@@ -534,7 +534,7 @@ dollars <- "millions"
 for(st in nyus_sort){
   print(st)
   tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
-  gtsave(tab, paste0("iitxSALT_byagi_table_", st, ".png"), path = here::here("results"))
+  gtsave(tab, paste0("2018xSALT_byagi_table_", st, ".png"), path = here::here("results"))
   # print(tab)
 }
 
@@ -542,7 +542,7 @@ for(st in nyus_sort){
 ```
 
 
-```{r iitxSALT_wide, rows.print=20}
+```{r 2018xsalt_pdiff_wide, rows.print=20}
 
 policy1 <- "law2018"
 policy2 <- "law2018_xSALT"
@@ -557,10 +557,10 @@ data <- pol_change(allsums_wide, policy1, policy2) %>%
   select(agi_label, stname, pdiff) %>%
   pivot_wider(names_from = stname, values_from = pdiff)
 
-iitwide_xSALT_tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
+tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
 
-gtsave(iitwide_xSALT_tab, "iitxSALT_pdiff_byagi_allstates_table.png", path = here::here("results"))
-iitwide_xSALT_tab
+gtsave(tab, "2018xsalt_pdiff_byagi_wide_table.png", path = here::here("results"))
+tab
 
 
 ```
