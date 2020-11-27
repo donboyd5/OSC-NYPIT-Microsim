@@ -1,0 +1,2327 @@
+---
+title: "IRS SOI Historical Table 2 for 2018"
+author: "Don Boyd"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    number_sections: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+
+<!-- 
+
+<style type="text/css">
+div.main-container {
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+  html_document:
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    toc_depth: 5
+editor_options:
+  chunk_output_type: console or inline    
+  
+  html_document:
+    toc: yes
+    df_print: paged
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+    
+-->
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(width = 150)
+```
+
+
+```{r notes}
+
+```
+
+
+<!--
+The goal is to explain using state-level federal income tax data from IRS Historical Table 2 for 2018 (when released) how New Yorkers’ federal income tax liability changed in 2018 (the first year in which the Tax Cuts and Jobs Act was in effect) relative to 2017 and earlier years, and how New York fared in comparison to other states. I assume the product will be a memo from me to the Comptroller’s office that examines and quantifies these issues, with appropriate tables and figures.
+
+The work would answer questions such as,
++  How much did federal income tax liability of New Yorkers change between 2017 and 2018?
++  How much of that appears to be attributable to changes in the size of the taxpaying population and to changes in underlying income (e.g., wages, business income), 
++  How much appears to be attributable to actions by taxpayers in anticipation of TCJA, and 
++  How much appears to be attributable to changes in the tax structure? 
++  To what extent do changes in New York appear similar to those in other states, or different?
+
+It could not answer these questions by feature of the law (it could not quantify how much of the tax change is attributable to SALT vs. rate changes or other features) because this project is focused on state-level summary data, not data on individual taxpayers.
+
+I will do this by identifying, isolating, and quantifying to the extent possible with these data and with New York economic data the extent to which federal income tax liability of New Yorkers changed as a result of:
++  Changes in the economy in New York relative to other states
++  Actions by taxpayers in New York and other states in anticipation of the TCJA to:
++    Accelerate deductions into 2017 to take advantage of deductibility at the higher 2017 tax rates;
++    Accelerate deductions for state and local taxes into 2017 to take advantage of (a) full SALT deductibility prior to institution of the TCJA SALT cap, and (b) the higher tax rates in 2017;
++    Push income from 2017 into 2018 to take advantage of the lower income tax rates in 2018
++  The new tax law rates, structure, etc.
+
+
+# Just a quick follow up. To do things the way we discussed, perfectly, I will want to:
+# - keep the 50 states and DC (drop PR and other areas, and drop the US total)
+# - recompute the US total as the sum of 50 states plus DC
+# That should get us the same % share as Mary has (assuming she did it the same way, as I believe she did).
+# 
+# This is fine - not much work - but it does mean that the US total I show will be less than the total people will find if they go to the IRS website, because the IRS US total includes PR and other areas. I can put a note in the document that mentions this, so anyone who compares will understand the reason. (In fact, the US total I show now excludes DC, PR, and other areas so I'd have to have a note anyway.) This, too is fine with me. I just wanted to let you know that the totals will be different, with a perfectly good explanation.
+# 
+# I'll plan to go ahead with this approach unless you say otherwise.
+
+-->
+
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# source(here::here("includes", "libraries.r"))
+library(tidyverse)
+# if more than 60 rows, print 60 - enough for states
+options(tibble.print_max = 60, tibble.print_min = 60) 
+library(scales)
+library(readxl)
+library(RColorBrewer)
+
+library(maps)
+library(usmap)
+library(grid)
+library(gridExtra)
+
+library(btools) # Matt, get from my github page if needed
+# library(bdata) # Matt, get from my github page if needed
+library(ggrepel)
+library(gt)
+library(glue)
+library(DT)
+library(knitr)
+library(kableExtra)
+library(btools)
+
+devtools::session_info()
+
+```
+
+
+```{r constants}
+# define states of interest
+sts <- c("NY", "US", "CT", "MA", "NJ", "CA", "FL", "TX")
+compstates <- c("CA","CT", "FL",  "MA", "NJ", "TX")
+
+# Note: 
+# N09600	Number of returns with alternative minimum tax 
+# A09600	Alternative minimum tax amount
+
+# A06500	Income tax after credits amount   	1040:13	Num
+# A10300	Total tax liability amount [11]  	1040:15	Num
+
+```
+
+
+```{r functions}
+fstubs <- function(agi_stub){
+  factor(agi_stub, levels=stubs$agi_stub, labels=stubs$aginame)
+}
+
+# stub <- 0
+# st <- "US"
+varstub_pch <- function(var, stub, sts, measname="pch_value"){
+  df <- h2n1 %>%
+    filter(varname==var, agi_stub==stub, stabbr %in% sts, !is.na(value),
+           measure==measname) %>%
+    select(year, stabbr, agi_stub, aginame, varname, description,
+           measure, value) %>%
+    pivot_wider(names_from=year) %>%
+    mutate(stabbr=factor(stabbr, levels=sts)) %>%
+    arrange(stabbr)
+  df
+}
+
+
+varstate_pch <- function(var, st, measname="pch_value"){
+  df <- h2n1 %>%
+    select(year, stabbr, agi_stub, aginame, varname, 
+           description, measure, value) %>%
+    filter(varname==var, stabbr==st, !is.na(value),
+           measure==measname) %>%
+    pivot_wider(names_from=year) %>%
+    mutate(stabbr=factor(stabbr, levels=sts)) %>%
+    arrange(stabbr)
+  df
+}
+
+vars_decomp <- function(vars, vlabs, ttitle, meas="avg", droprows=NULL){
+  
+  note1 <- "Note: n.m. means not meaningful."
+  note2 <- "\nDivisor for averages is total number of returns, not number claiming an item."
+  note <- note1
+  if(meas=="avg") note <- paste0(note1, note2)
+  
+  data <- decomp %>%
+    filter(agi_stub==0, year %in% 2017:2018, 
+           stabbr %in% c("NY", "US"),
+           measure==meas,
+           varname %in% vars) %>%
+    select(stabbr, stname, year, varname, value) %>%
+    pivot_wider(names_from=year, values_from=value) %>%
+    mutate(change=naz(`2018`) - naz(`2017`),
+           pch=change / `2017`)
+  
+  newrows <- data %>%
+    filter(stabbr=="NY") %>%
+    select(stabbr, stname, varname) %>%
+    mutate(stabbr="zzdiff", stname="NY minus US")
+  
+  diff_vars <- c("2017", "2018", "change", "pch")
+  if(meas %in% c("value", "valuem", "n1")) diff_vars <- "pch"
+
+  data2 <- bind_rows(data, newrows) %>%
+    group_by(varname) %>%
+    mutate(across(all_of(diff_vars), 
+                  ~ifelse(stabbr=="zzdiff",
+                          .[stabbr=="NY"] - .[stabbr=="US"],
+                          .)),
+           varname=factor(varname, 
+                          levels=vars,
+                          labels=vlabs)) %>%
+    ungroup %>%
+    arrange(stabbr, varname) %>%
+    filter(!row_number() %in% droprows)
+  
+  markers <- data2 %>%
+    select(stabbr) %>%
+    mutate(rownum=row_number()) %>%
+    group_by(stabbr) %>%
+    mutate(shade=ifelse(row_number() %in% seq(2, nrow(.), 2),
+                        TRUE, FALSE)) %>%
+    ungroup
+
+  shade_rows <- markers$rownum[markers$shade]
+  
+  data2 %>%
+    select(-stabbr) %>%
+    group_by(stname) %>%
+    gt() %>%
+    tab_header(
+      title = ttitle,
+      subtitle = "New York and the nation"
+      ) %>%
+    cols_label(stname="",
+               varname="",
+               pch="% change") %>%
+    fmt_currency(
+      columns = c("2017", "2018", "change"),
+      decimals = 0,
+      accounting = TRUE,
+      suffixing = FALSE
+    ) %>%
+      fmt_percent(
+      columns = c("pch"),
+      decimals = 1
+    ) %>%
+    fmt_missing(
+      columns = c("2017", "2018", "change", "pch"),
+      missing_text = "n.m."
+    ) %>%
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows=shade_rows
+      )
+    ) %>%
+    cols_align(align = c("left"), columns = c("stname", "varname")) %>%
+    tab_options(row_group.background.color = "lightgreen") %>%
+    tab_footnote(
+    footnote = "For NY minus US rows, % change is NY % change minus US % change",
+    locations = cells_column_labels( 
+      columns = vars(pch)
+      )
+    ) %>%
+    tab_source_note(
+      source_note = note
+      )
+}
+
+
+nvars_decomp <- function(vars, vlabs, ttitle, meas="avg", droprows=NULL){
+  
+  note1 <- "Note: n.m. means not meaningful."
+  note2 <- "\nDivisor for averages is total number of returns, not number claiming an item."
+  note <- note1
+  if(meas=="avg") note <- paste0(note1, note2)
+  
+  data <- decomp %>%
+    filter(agi_stub==0, year %in% 2017:2018, 
+           stabbr %in% c("NY", "US"),
+           measure==meas,
+           varname %in% vars) %>%
+    select(stabbr, stname, year, varname, value) %>%
+    pivot_wider(names_from=year, values_from=value) %>%
+    mutate(change=naz(`2018`) - naz(`2017`),
+           pch=change / `2017`)
+  
+  newrows <- data %>%
+    filter(stabbr=="NY") %>%
+    select(stabbr, stname, varname) %>%
+    mutate(stabbr="zzdiff", stname="NY minus US")
+  
+  diff_vars <- c("2017", "2018", "change", "pch")
+  if(meas %in% c("value", "valuem", "n1")) diff_vars <- "pch"
+
+  data2 <- bind_rows(data, newrows) %>%
+    group_by(varname) %>%
+    mutate(across(all_of(diff_vars), 
+                  ~ifelse(stabbr=="zzdiff",
+                          .[stabbr=="NY"] - .[stabbr=="US"],
+                          .)),
+           varname=factor(varname, 
+                          levels=vars,
+                          labels=vlabs)) %>%
+    ungroup %>%
+    arrange(stabbr, varname) %>%
+    filter(!row_number() %in% droprows)
+  
+  markers <- data2 %>%
+    select(stabbr) %>%
+    mutate(rownum=row_number()) %>%
+    group_by(stabbr) %>%
+    mutate(shade=ifelse(row_number() %in% seq(2, nrow(.), 2),
+                        TRUE, FALSE)) %>%
+    ungroup
+
+  shade_rows <- markers$rownum[markers$shade]
+  
+  data2 %>%
+    select(-stabbr) %>%
+    group_by(stname) %>%
+    gt() %>%
+    tab_header(
+      title = ttitle,
+      subtitle = "New York and the nation"
+      ) %>%
+    cols_label(stname="",
+               varname="",
+               pch="% change") %>%
+    fmt_number(
+      columns = c("2017", "2018", "change"),
+      decimals = 0
+    ) %>%
+      fmt_percent(
+      columns = c("pch"),
+      decimals = 1
+    ) %>%
+    fmt_missing(
+      columns = c("2017", "2018", "change", "pch"),
+      missing_text = "n.m."
+    ) %>%
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows=shade_rows
+      )
+    ) %>%
+    cols_align(align = c("left"), columns = c("stname", "varname")) %>%
+    tab_options(row_group.background.color = "lightgreen") %>%
+    tab_footnote(
+    footnote = "For NY minus US rows, % change is NY % change minus US % change",
+    locations = cells_column_labels( 
+      columns = vars(pch)
+      )
+    ) %>%
+    tab_source_note(
+      source_note = note
+      )
+}
+
+
+
+meas_decomp <- function(meas, mlabs, ttitle, comp="US", droprows=NULL){
+  note <- "Note: n.m. means not meaningful."
+    
+  data <- decomp %>%
+  filter(agi_stub==0, year %in% 2017:2018, 
+         stabbr %in% c("NY", comp),
+         measure %in% meas,
+         varname =="taxac") %>%
+  select(stabbr, stname, year, measure, value) %>%
+  pivot_wider(names_from=year, values_from=value) %>%
+  mutate(change=`2018` - `2017`,
+         pch=change / `2017`)
+
+newrows <- data %>%
+  filter(stabbr=="NY") %>%
+  select(stabbr, stname, measure) %>%
+  mutate(stabbr="zzdiff", stname="NY minus comparison group")
+
+data2 <- bind_rows(data, newrows) %>%
+  mutate(measure=factor(measure, 
+                        levels=meas,
+                        labels=mlabs)) %>%
+  arrange(stabbr, measure) %>%
+  filter(!row_number() %in% droprows) %>%
+  group_by(measure) %>%
+    mutate(across(-c(stabbr, stname), 
+                ~ifelse(stabbr=="zzdiff",
+                        .[stabbr=="NY"] - .[stabbr==comp],
+                        .))) %>%
+  ungroup
+
+markers <- data2 %>%
+  select(stabbr, measure) %>%
+  mutate(rownum=row_number(),
+         fmt=ifelse(str_detect(measure, "# of"),
+                    "number",
+                    "dollar")) %>%
+  group_by(stabbr) %>%
+  mutate(shade=ifelse(row_number() %in% seq(2, nrow(.), 2),
+                      TRUE, FALSE)) %>%
+  ungroup
+
+shade_rows <- markers$rownum[markers$shade]
+dollar_rows <- markers$rownum[markers$fmt=="dollar"]
+number_rows <- markers$rownum[markers$fmt=="number"]
+
+data2 %>%
+  select(-stabbr) %>%
+  group_by(stname) %>%
+  gt() %>%
+  tab_header(
+    title = ttitle,
+    subtitle = "New York and comparison group"
+  ) %>%
+  cols_label(stname="",
+             pch="% change") %>%
+  fmt_currency(
+    columns = c("2017", "2018", "change"),
+    decimals = 0,
+    accounting = TRUE,
+    rows=dollar_rows,
+    suffixing = FALSE
+  ) %>%
+  fmt_number(
+    columns = c("2017", "2018", "change"),
+    decimals = 0,
+    rows=number_rows,
+    suffixing = FALSE
+  ) %>%
+  fmt_percent(
+    columns = c("pch"),
+    decimals = 1
+  ) %>%
+  tab_style(
+    style = list(
+      cell_fill(color = "#f7f7f7")
+    ),
+    locations = cells_body(
+      rows=shade_rows
+    )
+  ) %>%
+  cols_align(align = c("left"), columns = c("stname", "measure")) %>%
+  tab_options(row_group.background.color = "lightgreen") %>%
+  tab_footnote(
+    footnote = "For NY minus US rows, % change is NY % change minus US % change",
+    locations = cells_column_labels( 
+      columns = vars(pch)
+      )
+    ) %>%
+  tab_source_note(
+      source_note = note
+      )
+}
+
+
+tabstab <- function(sts){
+  taxliab %>% 
+    filter(stabbr %in% sts) %>%
+  datatable(colnames = c('2017 minus 2016'='d2017_2016',
+                         '2018 minus 2017'='d2018_2017',
+                         '% change 2016 to 2017'='pd2017_2016',
+                         '% change 2017 to 2018'='pd2018_2017'),
+            filter='top',
+            options=list(pageLength = 11),
+            caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left;',
+                                                'Federal income tax liability in $ millions,
+                                                2016-2018')) %>% 
+  formatRound(columns=4:10, digits=1)
+
+}
+
+
+```
+
+
+```{r map_setup, include=FALSE}
+#.. Functions
+theme_map <- function(base_size=9, base_family="") {
+  # see:
+  # https://socviz.co/maps.html
+  # https://github.com/kjhealy/socviz
+  # https://cran.r-project.org/web/packages/usmap/vignettes/mapping.html
+  require(grid)
+  theme_bw(base_size=base_size, base_family=base_family) %+replace%
+    theme(axis.line=element_blank(),
+          axis.text=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title=element_blank(),
+          panel.background=element_blank(),
+          panel.border=element_blank(),
+          panel.grid=element_blank(),
+          panel.spacing=unit(0, "lines"),
+          plot.background=element_blank(),
+          legend.justification = c(0, 0),
+          legend.position = c(0, 0)
+    )
+}
+
+
+statemap <- function(mapdf, mapvar, 
+                     cutpts, cutlabels, map_colors, 
+                     map_title, map_subtitle=NULL,
+                     legend_title){
+  mapdf <- mapdf %>%
+    rename(mapvalue=all_of(mapvar)) %>%
+    mutate(data_group=cut(mapvalue, cutpts, labels=cutlabels),
+           mapvarname=mapvar) %>%
+    select(stabbr, mapvarname, mapvalue, data_group)
+  
+  mdata <- left_join(
+    usmap::us_map() %>% 
+      arrange(full, piece, order), 
+      mapdf %>% rename(abbr=stabbr),
+      by="abbr")
+  
+  p <- mdata %>%
+    ggplot(aes(x = x, y = y)) +
+    geom_polygon(aes(fill=data_group, group = group),
+               color = "gray90", size = 0.1) +
+    # na.translate drops NA from the legend
+    scale_fill_manual(values=map_colors, drop=TRUE, na.translate=FALSE) + 
+    coord_equal() + 
+    guides(fill=guide_legend(title=legend_title)) +
+    ggtitle(map_title,
+            subtitle=map_subtitle) +
+    geom_text(data = bdata::statemap_labels %>%
+                filter(stabbr != "DC"), aes(x, y, label = stabbr), size = 3) +
+    theme_map() +
+    theme(legend.position = "right") +
+    theme(plot.title = element_text(size = 14, face = "bold"))
+  
+  #   labs(caption=capt) +
+  #   theme(plot.caption = element_text(hjust=0, size=8))
+  return(p)
+}
+
+```
+
+
+```{r prep_data, rows.print = 11, include=FALSE}
+# Tax liability after credits definition 10/30/2020
+# Calculated as:
+#   A10300	Total tax liability amount [11]  
+#     minus the refundable credits 1040:15
+#       A59720	Excess earned income credit (refundable) amount [10]  	1040:17a
+#       A11070	Additional child tax credit amount	1040:17b
+#       A10960	Refundable education credit amount	1040:17c
+#  refcredits = naz(a59720) + naz(a11070) + naz(a10960)
+#  taxac = a10300 - refcredits
+
+
+# 0 = No AGI Stub
+# 1 = ‘Under $1’
+# 2 = '$1 under $10,000'
+# 3 = '$10,000 under $25,000'
+# 4 = '$25,000 under $50,000'
+# 5 = '$50,000 under $75,000'
+# 6 = '$75,000 under $100,000'
+# 7 = '$100,000 under $200,000'
+# 8 = ‘$200,000 under $500,000’
+# 9 = ‘$500,000 under $1,000,000’
+# 10 = ‘$1,000,000 or more’
+
+# A01000	Net capital gain (less loss) amount
+
+xlfile <- 'Boyd OSC analysis(5).xlsx'
+
+xwalk <- read_excel(here::here('ignore', xlfile),
+                    sheet='2018dictionary',
+                    skip=2)
+xwalk
+# ht(xwalk)
+
+stubs <- read_excel(here::here('ignore', xlfile), 
+                    sheet='agistubs',
+                    range='A3:B14') %>%
+              mutate(agi_stub=as.integer(agi_stub))
+stubs
+
+ht2 <- readRDS(here::here('data', 'soi', 'ht2.rds'))
+glimpse(ht2)
+ns(ht2)
+
+
+# tmp <- ht2 %>%
+#   filter(year >= 2017) %>%
+#   select(year, stabbr, agi_stub, n04450)
+
+# leave out PR, OA, keep DC but drop graphs, tables, recompute US!!!
+
+# compute tax after credits per the definition we agreed to djb 10/30/2020
+#  refcredits = naz(a59720) + naz(a11070) + naz(a10960)
+#  taxac = a10300 - refcredits
+ns(ht2)
+ht2a <- ht2  %>% # NOTE: PR showed up in 2018
+  filter(stabbr %in% c(state.abb, "DC")) %>%  # drop the U.S. as we will create our own
+  left_join(stubs,
+            by='agi_stub') %>%
+  mutate(othertaxes=a10300 - naz(a06500),
+         refcredits = naz(a59720) + naz(a11070) + naz(a10960),
+         taxac = a10300 - refcredits)
+# count(ht2a, agi_stub, aginame)
+# glimpse(ht2a)
+
+# check that we have the data for taxac
+check <- ht2a %>%
+  select(year, stabbr, agi_stub, a06500, othertaxes, a10300, a59720, a11070, a10960, refcredits, taxac)
+check %>%
+  filter(stabbr=="NY", agi_stub==0)
+
+
+# now make a long file with labels
+ht2long_xus <- ht2a %>%
+  pivot_longer(cols = -c(year, stabbr, agi_stub, aginame), names_to="varname") %>%
+  left_join(xwalk %>% 
+              select(varname=variable, description) %>%
+              mutate(varname=str_to_lower(varname)),
+            by = "varname") %>%
+  mutate(description=ifelse(varname=="othertaxes",
+                            "Other taxes in addition to regular income tax (calculated)",
+                            description),
+         description=ifelse(varname=="refcredits",
+                            "Refundable EIC, child, and education credits (calculated)",
+                            description),
+         description=ifelse(varname=="taxac",
+                            "Total tax liability after refundable credits (calculated)",
+                            description))
+
+# make the US file (with states and dc, but not pr or oa)
+ht2long_us <- ht2long_xus %>%
+  group_by(year, agi_stub, aginame, varname, description) %>%
+  summarise(value=sum(value, na.rm=TRUE), .groups="drop") %>%
+  mutate(stabbr="US")
+
+# make a US excluding NY file
+# count(ht2long_xus, stabbr)
+ht2long_usxny <- ht2long_xus %>%
+  filter(stabbr != "NY") %>%
+  group_by(year, agi_stub, aginame, varname, description) %>%
+  summarise(value=sum(value, na.rm=TRUE), .groups="drop") %>%
+  mutate(stabbr="USxNY")
+
+ht2long = bind_rows(ht2long_xus, ht2long_us, ht2long_usxny)
+
+n1 <- ht2long %>%
+  filter(varname=="n1") %>% 
+  select(year, stabbr, agi_stub, n1=value)
+
+h2n1 <- ht2long %>%
+  left_join(n1, by = c("year", "stabbr", "agi_stub")) %>%
+  mutate(avgvalue=ifelse(varname %in% c("n1", "mars1", "mars2"), 
+                         value / n1 * 100,
+                         value / n1 * 1000)) %>%
+  group_by(stabbr, agi_stub, varname) %>%
+  mutate(pch_value=value / value[match(year - 1, year)] * 100 - 100,
+         pch_avg=avgvalue / avgvalue[match(year - 1, year)] * 100 - 100) %>%
+  pivot_longer(cols=c(value, avgvalue, pch_value, pch_avg), names_to="measure") %>%
+  ungroup %>%
+  mutate(stname=factor(stabbr, 
+                       levels=c(state.abb, "DC", "US", "USxNY"), 
+                       labels=c(state.name, "District of Columbia", "United States", "US excluding NY")),
+         stname=as.character(stname)) %>%
+  select(year, stabbr, stname, everything())
+  
+# count(h2n1, stabbr, stname)
+
+
+# h2n1 %>% filter(stabbr=="CA", agi_stub==0, varname=="mars1")
+
+# examine an extreme outlier -- WI tax liability, stub 1, 2016
+check <- h2n1 %>% 
+  filter(stabbr=="WI", agi_stub==1, varname=="a06500", measure=="value") %>%
+  select(-measure) %>%
+  arrange(varname, agi_stub, year)
+# DT::datatable(check)
+# taxagi %>% filter((stabbr=="WI" & agi_stub==1)) # a10300 for WI in stub 1 in 2016 is an outlier
+
+taxagi <- h2n1 %>%
+  filter(varname %in% c("a00100", "taxac"),
+         measure=="value") %>%
+  select(year, stabbr, stname, agi_stub, aginame, varname, value) %>%
+  pivot_wider(names_from=varname) %>%
+  mutate(taxpct=taxac / a00100 * 100)
+
+# get dollar changes and percent changes
+taxliab <- taxagi %>%
+  filter(year >= 2016) %>%
+  select(year, stabbr, stname, agi_stub, aginame, taxac) %>%
+  mutate(year=paste0("TY", year),
+         taxac=taxac / 1e3) %>%
+  pivot_wider(values_from = taxac, names_from=year) %>%
+  mutate(d2017_2016=TY2017 - TY2016,
+         d2018_2017=TY2018 - TY2017,
+         pd2017_2016 = d2017_2016 / TY2016 * 100,
+         pd2018_2017 = d2018_2017 / TY2017 * 100)
+
+nyliab <- taxliab %>% filter(stabbr=="NY")
+usliab <- taxliab %>% filter(stabbr=="US")
+
+```
+
+
+```{r make_decomp}
+# income (e.g., wages, business income)
+# a00100 agi
+# a04800 taxable income
+# a05800 regular tax before credits, INCLUDES AMT
+# a09600  AMT
+# a07100 tax credits
+# a06500 regular income tax liability after nonrefundable credits - does not include SET
+# a10300 total tax liability after nonrefundable credits line 15
+# refcredits - agreed upon definition of refundable credits
+# taxac -- agreed upon definition of tax after credits
+# count(decomp, measure)
+
+income <- c("a00200", # wages
+            "a00650", # qualified dividends
+            "a00900", # business and professional
+            "a26270", # S corp, partnership and pass-through
+            "a01000", # net capital gains
+            "a01400", # taxable IRAs 2017
+            "a01700", # taxable pensions 2017
+            "a01750", # taxable IRA distributions, pensions 2018
+            "a02500"  # taxable Social Security
+            )
+
+# Total itemized deductions]	a04470		a04470
+# Total medical and dental expense deduction  (after limit)	a17000		a17000
+
+# State and local income taxes 	a18425		a18425
+# State and local general sales taxes 	a18450		a18450
+# Real estate taxes 	a18500		a18500
+# Personal property taxes 	a18800		a18800
+# Limited state and local taxes 			a18460
+# Total taxes paid 	a18300		a18300
+			
+# Home mortgage interest paid 	a19300		a19300
+# Home mortgage interest paid to personal seller 	a19500		a19500
+# Deductible points 	a19530		a19530
+# Qualified mortgage insurance premiums 	a19550		
+			
+# Investment interest paid 	a19570		a19570
+# Total charitable contributions 	a19700		a19700
+# Net limited miscellaneous deduction 	a20800		a20950
+# Gambling loss deduction and other non-limited miscellaneous deduction 	a20950
+
+itemded <- c("a04470",
+             "a17000",
+             "a18425", "a18450", "a18500", "a18800", "a18460", "a18300",
+             "a19300", "a19500", "a19530", "a19550",
+             "a19570",
+             "a19700",
+             "a20800",
+             "a20950"
+             )
+
+decomp <- h2n1 %>%
+  filter(varname %in% c("a00100", "a04800", 
+                        "a05800", "a07100", "a06500", "a09600",
+                        "othertaxes", "a10300", "refcredits", "taxac",
+                        income,
+                        itemded,
+                        "a04470", # itemized deductions
+                        "n04470", # number of itemizers
+                        "a04475", # qualified business income deduction
+                        "a07180", "a07220", "a07225" # child credits
+                        ),
+         measure=="value") %>%
+  select(year, stabbr, stname, agi_stub, aginame, n1, varname, value) %>%
+  pivot_wider(names_from = varname) %>%
+  mutate(business_inc=naz(a00900) + naz(a26270),
+         retire_inc=naz(a01400) + naz(a01700) + naz(a01750) + naz(a02500),
+         other_inc=a00100 - a00200 - a00650 - business_inc - retire_inc - a01000,
+         deduct_used=pmax(a00100 - a04800, 0), # agi minus taxable income
+         deduct_other=deduct_used - naz(a04470) - naz(a04475), # non-itemized, non-QBI ded & px
+         salt_uncapped=naz(a18425) + naz(a18450) + naz(a18500) + naz(a18800),
+         salt_caploss=naz(a18460 - salt_uncapped),
+         id_mortgage = naz(a19300) + naz(a19500) + naz(a19530) + naz(a19550),
+         id_other=naz(a04470) - naz(a17000) - naz(a18300) - naz(id_mortgage) - naz(a19700), # dropped a20800
+         nrcredit_used=a05800 - a06500, # nonrefundable credits
+         credit_check=a07100 / nrcredit_used,
+         child_credits=naz(a07180) + naz(a07220) + naz(a07225),
+         other_credits=pmax(nrcredit_used - child_credits, 0),
+         a05800_bef_AMT=naz(a05800) - naz(a09600),
+         taxti_pct=taxac / a04800 * 100,
+         tiagi_pct=a04800 / a00100 * 100,
+         taxagi_pct=taxac / a00100 * 100,
+         deductagi_pct=deduct_used / a00100 * 100) %>%
+  pivot_longer(cols = -c(year, stabbr, stname, agi_stub, aginame, n1), names_to = "varname") %>%
+  mutate(avg= value / n1 * 1000,
+         valuem=value / 1000) %>%
+  pivot_longer(c(n1, avg, value, valuem), names_to = "measure") %>%
+  group_by(stabbr, agi_stub, aginame, varname, measure) %>%
+  mutate(pch=value / value[match(year - 1, year)] * 100 - 100,
+         diff=value - value[match(year - 1, year)]) %>%
+  ungroup
+
+```
+
+
+```{r constants_for_text}
+# constants used in text below
+ny <- decomp %>% filter(year==2018, stabbr=="NY", agi_stub==0, varname=="taxac")
+us <- decomp %>% filter(year==2018, stabbr=="NY", agi_stub==0, varname=="taxac")
+
+nyliab_pch <- decomp %>% 
+  filter(year==2018, stabbr=="NY", agi_stub==0, varname=="taxac", measure=="value") %>%
+  .$pch
+
+nyliab_dchangeb <- decomp %>% 
+  filter(year==2018, stabbr=="NY", agi_stub==0, varname=="taxac", measure=="valuem") %>%
+  .$diff / 1000
+
+usliab_pch <- decomp %>% 
+  filter(year==2018, stabbr=="US", agi_stub==0, varname=="taxac", measure=="value") %>%
+  .$pch
+
+usliab_dchangeb <- decomp %>% 
+  filter(year==2018, stabbr=="US", agi_stub==0, varname=="taxac", measure=="valuem") %>%
+  .$diff / 1000
+
+nyavgtax_pch <- decomp %>% 
+  filter(year==2018, stabbr=="NY", agi_stub==0, varname=="taxac", measure=="avg") %>%
+  .$pch
+
+usavgtax_pch <- decomp %>% 
+  filter(year==2018, stabbr=="US", agi_stub==0, varname=="taxac", measure=="avg") %>%
+  .$pch
+
+nynret_pch <- decomp %>% 
+  filter(year==2018, stabbr=="NY", agi_stub==0, varname=="taxac", measure=="n1") %>%
+  .$pch
+
+usnret_pch <- decomp %>% 
+  filter(year==2018, stabbr=="US", agi_stub==0, varname=="taxac", measure=="n1") %>%
+  .$pch
+
+
+```
+
+
+
+**Use the links above to navigate this document (Ctrl-home to return to the top to access the links).**
+
+
+# Summary and main conclusions
+
+This report examines recently released data from the IRS on federal income taxes by state in 2018, and compares it to 2017 and earlier years. (See [data and notes](#app2).)
+
+It addresses the following questions, within the limits of the data:
+
+*  How did federal income tax liability of New Yorkers change between 2017 and 2018?
+   + To what extent was the change attributable to changes in the number of taxpayers as opposed to other factors?
+   + What role did changes in tax credits play, as opposed to changes in pre-credit liability?
+   + What role did change in the alternative minimum tax (AMT) play?
+   
+*  What role did changes in underlying income (e.g., wages, business income, capital gains) play?
+
+*  To what extent did taxpayers appear to move income or deductions in anticipation of and in response to the Tax Cuts and Jobs Act (TCJA), which took effect in 2018?
+
+*  To what extent was changes in New Yorker's tax liability affected by changes in the tax structure as a result of the TCJA, and how did that compare to other states?
+
+The sections below explore these questions in detail. The summary conclusions are:
+
+*  Changes in federal income tax liability:
+
+    + Federal income tax liability of New Yorkers did not decrease as rapidly between 2017 and 2018 as it did for the US as a whole:
+        + Total income tax liability of New Yorkers after refundable credits declined `r scales::percent(abs(nyliab_pch / 100), .1)` in 2018, or `r scales::dollar(abs(nyliab_dchangeb), .1)` billion.
+        + By contrast, total income tax liability in the nation, after refundable credits, declined `r scales::percent(abs(usliab_pch / 100), .1)`, or `r scales::dollar(abs(usliab_dchangeb), .1)` billion.
+    + The different NY vs. US growth rates in total income tax liability after refundable credits primarily reflected different growth rates in average taxes, not in the number of taxpayers:
+        + Average tax liability of New Yorkers fell `r scales::percent(abs(nyavgtax_pch / 100), .1)` compared to a decline for the US as a whole of `r scales::percent(abs(usavgtax_pch / 100), .1)`, a difference of `r scales::percent(abs((nyavgtax_pch - usavgtax_pch) / 100), .1)`.
+        + By contrast, the number of tax filers in NY increased `r scales::percent(abs(nynret_pch / 100), .1)` while the number in the nation increased `r scales::percent(abs(usnret_pch / 100), .1)`, a small difference.
+    + Tax liability of New Yorkers, before credits, *increased* $751 million, or 0.5%, while it fell in the nation as a whole. An increase in tax credits of $4.1 billion, driven by child credits, was enough to make New Yorkers' tax liability decrease slightly in 2018.
+    + New Yorkers' regular income tax, before considering the AMT, increased by $5.6 billion (4.0%). However, the near-elimination of the AMT reduced regular income tax liability by $4.9 billion, leaving New Yorkers with a $751 million increase in tax liability before credits.
+  
+* What role did changes in adjusted gross income (AGI) play?
+    + These data allow us to describe income changes but not to explain why income changed the way it did. In general, changes in income reported for tax purposes appear consistent with national changes and with changes reported in economic statistics. 
+    + Differences between NY and the US in how income changed do not appear to be an important reason for differences in how effective tax rates changed.
+    + Qualifed dividends increased by more than 12% in NY and in the US, discussed further below.
+    + Capital gains increased only 3%, but according to the Division of the Budget, this likely was because 2017 was a year of extraordinary growth. The 2017 growth may have been driven by taxpayers deferring capital gains from 2016 into 2017, at a time when taxpayers hoped for a federal capital gains cut in 2017 that never materialized.
+    + Retirement income increased 6.1%, in keeping generally with the aging of the population and the relatively faster growth in these sources.
+    + Business income declined 3.2% in New York.
+    + Other AGI increased dramatically in NY and the US. It is not clear why this is so.
+
+* Taxpayer movement of deductions and income in anticipation of and response to the TCJA:
+    + I examined changes over time in NY and selected other states in deduction and income items that seemed most likely to be movable.
+    + The data suggest taxpayers may have moved some real estate tax deductions and charitable contribution deductions into 2017, presumably from 2018.
+    + The data also suggest some possible movement of qualified dividends from 2017 into 2018.
+    + It does not look like there was massive movement of income and deductions.
+    + Econometric methods supplemented with additional data could do a better job of identifying these movements, but if movements were large I think they would be more apparent in the graphs shown below.
+
+* Changes in tax structure clearly were the main reason for the fact that New York average tax liability declined only slightly, and considerably less than the US:
+    + Although AGI increased only 4.1% in NY, taxable income increased 12.8%, a gap of 8.7%. By contrast, US AGi increased 5.8% and taxable income increased 11.6%, a gap of 5.8%.
+    + The reason the gap was so much greater in NY was deductions, and primarily the SALT deduction and its interplay with the standard deduction.
+    + The net result is that effective tax rates in NY fell considerably less than those in the nation, and millionaires had an increase in effective tax rates.
+    +  I think that the scatterplot and maps show these conclusions the best. See the [scatterplot](#scatter). Also see the maps of changes in effective tax rates, beginning [here](#map_start).
+    
+See details below, and appendices, for extensive sets of tables and graphs that elaborate on many of these points.
+
+
+# How federal income tax liability after refundable credits changed
+<br>
+## Total income tax liability after refundable credits, # of returns, and average tax after credits
+
+The table below shows % change in number of taxpayers, average tax after credits, and total tax liability after refundable credits. Federal income tax liability of New Yorkers fell less than liability for the nation as a whole, primarily because average tax fell faster for the nation.
+
+Thus, change in total income tax liability after refundable credits was driven primarily by changes in average tax, not changes in number of returns. I will focus more on average tax liability than total liability in the analysis below.
+
+Total tax liability equals the number of taxpayers times their average tax, so it is useful to decompose changes in total liability into changes in the number of taxpayers and changes in their average tax.
+
+A rough rule of thumb is that the percent change in total tax is approximately the percent change in the number plus the percent change in the average. (If the percent changes are large a more-precise calculation is needed.)
+
+Across all taxpayers:
+
+*  NY total tax liability decreased `r abs(round(ny$pch[ny$measure=="value"], 1))`%, reflecting an increase of `r round(ny$pch[ny$measure=="n1"], 1)`% in the number of returns and a `r abs(round(ny$pch[ny$measure=="avg"], 1))`% reduction in the average tax.
+
+*  US total tax liability decreased `r abs(round(us$pch[us$measure=="value"], 1))`%, reflecting an increase of `r round(us$pch[us$measure=="n1"], 1)`% in the number of returns and a `r abs(round(us$pch[us$measure=="avg"], 1))`% reduction in the average tax.
+
+
+*  This varies by income range. In all income ranges of $50k or higher, average tax fell more in the nation than it did in New York. **This is a clue that the TCJA probably lowered taxes more in the rest of the nation than in New York.**
+
+<br>
+
+## NY compared with the United States, Total income tax liability after refundable credits
+
+
+```{r }
+meas <- c("n1", "avg", "valuem")
+mlabs <- c("# of returns", "average total income tax after refundable credits", "total tax after refundable credits ($ millions)")
+ttitle <- "Number of returns, average tax, and total tax"
+tbl <- meas_decomp(meas, mlabs, ttitle, droprows=c(7, 9))
+tbl %>%
+  gtsave(
+    "tab1.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tbl
+
+
+```
+
+## NY compared with rest of nation, Total income tax liability after refundable credits
+```{r}
+meas <- c("n1", "avg", "valuem")
+mlabs <- c("# of returns", 
+           "average total income tax after refundable credits",
+           "total tax after refundable credits ($ millions)")
+ttitle <- "Number of returns, average tax, and total tax"
+tbl <- meas_decomp(meas, mlabs, ttitle, comp="USxNY", droprows=c(7, 9))
+
+tbl %>%
+  gtsave(
+    "tab2.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tbl
+
+
+```
+
+
+## Total income tax before refundable credits, refundable credits, and total tax after refundable credits
+```{r}
+vars <- c("a10300",
+          "refcredits", 
+          "taxac")
+vlabs <- c("Total income tax before refundable credits",
+           "Refundable credits",
+           "Total income tax after refundable credits")
+
+```
+
+
+
+### Change in $ millions
+
+```{r decomp_taxac}
+ttitle <- "Total income tax before refundable credits, refundable credits, and total tax after refundable credits, $ millions"
+tab <- vars_decomp(vars, vlabs, ttitle, meas="valuem")
+tab
+
+```
+
+
+### Change in average values per return
+
+
+```{r decomp_taxac_avg}
+ttitle <- "Average total income tax before refundable credits, refundable credits, and total tax after refundable credits"
+tab <- vars_decomp(vars, vlabs, ttitle)
+tab
+
+```
+
+## Regular income tax before credits, tax credits, and regular tax after credits
+
+Changes in average tax after credits were driven by changes in tax before credits *and* changes in credits.
+
+Tax before credits of New Yorkers increased slightly, but fell for the US as a whole.
+
+The increase in credits was large enough to lead to a slight reduction in tax after credits for New Yorkers.
+
+```{r}
+vars <- c("a05800",
+          "nrcredit_used", 
+          "a06500")
+vlabs <- c("Tax before credits",
+           "Nonrefundable credits used",
+           "Tax after credits")
+
+```
+
+
+### Change in $ millions
+
+```{r decomp_tax_tot}
+ttitle <- "Tax before credits, credits, and tax after credits, $ millions"
+tab <- vars_decomp(vars, vlabs, ttitle, meas="valuem")
+tab
+
+```
+
+
+### Change in average values per return
+
+
+```{r decomp_tax_avg}
+ttitle <- "Tax before credits, credits, and tax after credits, $ per return"
+tab <- vars_decomp(vars, vlabs, ttitle)
+tab
+
+```
+
+## Tax credits
+
+The data here are for nonrefundable credits. (A portion of the EITC is refundable. That portion is not reflected in the tables below.)
+
+Child credits increased the most, but other credits increased as well.
+
+Child credits in NY increased by approximately $3 billion.
+
+```{r decomp_credits}
+vars <- c("child_credits",
+          "other_credits",
+          "nrcredit_used")
+vlabs <- c("Child credits",
+           "Other credits",
+           "Nonrefundable credits used")
+
+```
+
+
+### Change in $ millions
+```{r decomp_credits_tot}
+ttitle <- "Nonrefundable tax credits by type, in $ millions"
+tab <- vars_decomp(vars, vlabs, ttitle, meas="valuem")
+tab %>%
+  gtsave(
+    "tab3.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+
+```
+
+
+### Change in average values per return
+```{r decomp_credits_avg}
+ttitle <- "Average values for nonrefundable credits by type, $ per return"
+tab <- vars_decomp(vars, vlabs, ttitle)
+tab %>%
+  gtsave(
+    "tab4.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+
+
+```
+
+
+## The AMT and regular income tax before credits
+
+Regular income tax before credits of New Yorkers, before considering the AMT, increased 4% compared with 1.3% for the US as a whole. The decline in the AMT reduced this to an increase of 0.5% for New Yorkers.
+
+
+```{r}
+vars <- c("a05800",
+          "a09600",
+          "a05800_bef_AMT")
+vlabs <- c("Regular income tax before credits, including AMT",
+           "Alternative minimum tax",
+           "Regular income tax before AMT")
+```
+
+
+### Change in $ millions
+```{r decomp_AMT_total}
+ttitle <- "Regular tax and AMT, $ millions"
+tab <- vars_decomp(vars, vlabs, ttitle, meas="valuem")
+tab %>%
+  gtsave(
+    "tab5.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+```
+
+
+### Change in average values per return
+
+```{r decomp_AMT_avg}
+# a05800_bef_AMT=naz(a05800) - naz(a09600),
+ttitle <- "Average values for regular income tax before credits and for the AMT"
+tab <- vars_decomp(vars, vlabs, ttitle)
+tab %>%
+  gtsave(
+    "tab6.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+
+```
+
+
+# Impact of the economy, as measured by changes in adjusted gross income
+
+The following table decompose the largest components of adjusted gross income that are available in both years, with other components lumped into a residual category.
+
+AGI per return grew 1% less quickly in NY than in the nation. This appears to reflect primarily 1% slower wage growth, 4.3% slower growth in net capital gains, and far slower growth in the much-smaller "All other" category (which grew rapidly, but not as rapidly as the nation).
+
+The slower growth overall appears consistent with other measures of the economy. For example, as reported by the [Bureau of Economic Analysis](https://apps.bea.gov/iTable/iTable.cfm?reqid=70&step=1&isuri=1&acrdn=6#reqid=70&step=1&isuri=1) grew 0.5% less rapidly in New York than in the nation. 
+
+Some of the details are unusual and further analysis may yield insights. For example, the slower capital gains growth and business income growth might reflect the impact of previous tax planning, in an effort to take advantage of earlier tax cut proposals that were not enacted. [Analysis by the Division of the Budget](https://www.budget.ny.gov/pubs/archive/fy21/exec/ero/fy21ero.pdf) (pp.71-73) suggests that the slow growth in capital gains in 2018 was a slowdown from an extraordinary surge in 2017, which may have reflected efforts to delay capital gains from 2016 into 2017 in hopes of a capital gains tax cut that never came.
+
+Tables above and below make it clear that the main differences in growth of federal income tax liability in New York and the nation are due to differential impacts of the TCJA.
+
+
+```{r agi_vars, include=FALSE}
+# other_inc=a00100 - a00200 - a00650 - business_inc - retire_inc - a01000,
+agivars <- c("a00200",
+          "a00650",
+          "business_inc",
+          "retire_inc",
+          "a01000",
+          "other_inc",
+          "a00100"
+          )
+agivlabs <- c("Wages",
+           "Qualified dividends",
+           "Business, professional, and pass-through-entity income",
+           "Taxable IRA withdrawals, pensions, and Social Security",
+           "Net capital gains",
+           "All other AGI, net",
+           "Adjusted gross income")
+```
+
+
+## Change in AGI components, $ millions
+```{r decomp_totincome, eval=TRUE}
+ttitle <- "Components of adjusted gross income, $ millions"
+tab <- vars_decomp(agivars, agivlabs, ttitle, meas="valuem")
+tab %>%
+  gtsave(
+    "tab7.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+```
+
+
+The rapid growth in the "other" category suggests that taxpayers may have pushed income into 2018 from 2017, but the data don't allow us to look further.
+
+## Change in AGI components, average values per return
+
+```{r decomp_avgincome}
+# other_inc=a00100 - a00200 - a00650 - business_inc - retire_inc - a01000,
+
+ttitle <- "Components of adjusted gross income, dollars per return"
+tab <- vars_decomp(agivars, agivlabs, ttitle, meas="avg")
+tab %>%
+  gtsave(
+    "tab8.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+```
+
+# Potential tax-motivated changes in the timing of income and deductions
+
+The TCJA gave taxpayers incentives to:
+
+* Pull deductions into 2017 from 2018, to deduct against higher 2017 rates
+  +  With an extra-strong incentive to pull the SALT deduction into 2017, to claim the deduction before the TCJA went into effect
+* Push income out of 2017 into 2018 to take advantage of lower rates in 2018
+
+I examine this by graphing average deduction and income items over time. If the effect is large, I would expect to see a spike in deductions in 2017, and a drop in income in 2017 followed by an increase in 2018.
+
+I examine itemized deductions from 2012 through 2017. I do not include 2018 because all itemized deductions fall off dramatically due to the substantial increase in the standard deduction, and including 2018 would make it harder to see what happened in 2017. I am able to examine income through 2018, however.
+
+For deductions, we examine the SALT deduction in total, its income tax and real estate tax components, and the charitable contribution deduction, all of which are large and seem easiest to move. For income, we examine net capital gains, business income, and qualified dividends, all of which are large and seem easiest to move. (For example, rich owners of closely held corporations might be able to delay paying dividends from the 4th quarter of 2017 into the 1st quarter of 2018.)
+
+We examine the four highest income ranges, where taxpayers have the greatest incentive to move money due to the higher rates, and likely the greater ability to do so. We examine three high-tax states (CA, CT, NY), two low-tax states (FL, TX), and the US as a whole.
+
+The graphs show relatively little obvious effect, although:
+
+* The real estate tax deduction may have had abnormally large increases in 2017 in the three highest income ranges.
+* There may have been abnormally large increases in 2017 in the charitable contribution in 2017 in several states.
+* There may have been larger than normal dips in qualified dividends in 2017 and larger than normal increases in 2018 in the highest income range in a few states.
+
+I think if the effect had been truly large it would have been more apparent in these graphs, but it looks like there were some small effects. 
+
+It is possible to look for effects in a more sophisticated way. All of them are influenced by other factors in addition to federal tax rules. State and local tax deductions are affected by state and local tax policies, and by income and real estate values. Capital gains are affected by the stock market and state tax rates. Dividends are affected by corporate profits. A sophisticated analysis would gather data and control for these and other variables, using econometric techniques. That would lead to much more nuanced and precise conclusions than the graphical approach but again, if the effect were large I think we would have seen more with graphical methods.
+
+
+```{r}
+
+linegraph <- function(var, sts, gtitle, subt, years=2012:2017){
+  p <- decomp %>%
+    filter(stabbr %in% sts,
+           varname == var, measure=="avg") %>%
+    select(stabbr, year, agi_stub, aginame, varname, value) %>%
+    filter(agi_stub %in% 7:10, year %in% years) %>%
+    ggplot(aes(year, value, colour=stabbr)) +
+    geom_line() +
+    geom_point() +
+    facet_wrap(~agi_stub+aginame, ncol=2,
+               scales = "free") +
+    scale_x_continuous(name="Tax year") +
+    scale_y_continuous(name="Average per return, $", labels=scales::comma_format()) +
+    ggtitle(paste(gtitle, ": Top 4 AGI ranges"),
+          subtitle=subt) +
+    guides(colour=guide_legend(title=NULL)) +
+  theme_bw()
+  p
+}
+
+sts <- c("CA", "NY", "FL", "TX", "US")
+sts <- c("CA", "CT", "NY", "FL", "TX", "US")
+
+```
+
+
+## Potential acceleration of deductions into 2017
+
+### The SALT deduction
+
+```{r}
+# glimpse(decomp)
+# count(decomp, varname)
+# stubs
+# Total taxes paid 	a18300		a18300
+# State and local income taxes 	a18425		a18425
+# State and local general sales taxes 	a18450		a18450
+# Real estate taxes 	a18500		a18500
+# Personal property taxes 	a18800		a18800
+# Limited state and local taxes 			a18460
+# Total taxes paid 	a18300		a18300
+
+```
+
+
+#### SALT deduction for all taxes
+
+```{r behavior_salt_total}
+subt <- "(Total deduction divided by # of returns, whether claiming deduction or not)"
+linegraph("a18300", sts, "Average SALT total deduction", subt)
+
+```
+
+
+#### SALT deduction for income taxes
+```{r}
+subt <- "(Total deduction divided by # of returns, whether claiming deduction or not)"
+linegraph("a18425", sts, "Average SALT income tax deduction", subt)
+```
+
+#### SALT deduction for real estate taxes
+```{r behavior_salt_retax}
+subt <- "(Total deduction divided by # of returns, whether claiming deduction or not)"
+linegraph("a18500", sts, "Average SALT real estate tax deduction", subt)
+
+```
+
+### The charitable contribution deduction
+```{r behavior_charitable}
+subt <- "(Total deduction divided by # of returns, whether claiming deduction or not)"
+linegraph("a19700", sts, "Average charitable contribution deduction", subt)
+
+```
+
+## Potential deceleration of income
+
+### Net capital gains
+```{r}
+subt <- "(Total income component divided by # of returns)"
+linegraph("a01000", sts, "Average net capital gain", subt, years=2012:2018)
+
+```
+
+### Business, professional and pass-through-entity income
+```{r}
+subt <- "(Total income component divided by # of returns)"
+linegraph("business_inc", sts, "Average business and passthrough-entity income", subt, years=2012:2018)
+
+```
+
+### Qualified dividends
+```{r}
+subt <- "(Total income component divided by # of returns)"
+linegraph("a00650", sts, "Average qualified dividends income", subt, years=2012:2018)
+
+```
+
+
+# Impact of tax structure changes
+
+## Income and deductions
+
+Even though AGI grew slower in NY than the US, taxable income grew faster because of the loss of deductions
+
+Total deductions are defined here as the difference between AGI and taxable income. They include the following items:
+
+* Standard deductions, which were increased substantially in 2018,
+* Personal/dependent exemptions, which were eliminated in 2018,
+* Itemized deductions, scaled back in 2018 largely due to the SALT cap, and
+* Qualified Business Income deduction for certain pass-through income, introduced in 2018
+
+The table below combines the standard deductions and personal exemptions because the data do not allow us to separate them. Reminder: Averages are computed using all returns as the denominator. Thus, for example, the average standard deduction is the total standard deduction of all taxpayers claiming the deduction, divided by the total number of taxpayers (including itemizers).
+
+Under the TCJA many people who formerly would have reported and claimed itemized deductions did not in 2018 because the increased standard deduction and reduced SALT deduction encouraged claiming the standard deduction. This table does not isolate this effect.
+
+Key points:
+
+* Although AGI grew more slowly in NY than in the US, taxable income grew faster.
+* The reason is that deductions fell much more rapidly in NY than in the US.
+* Itemized deductions fell far more rapidly in NY than the US but the average deduction still was higher in NY.
+* Standard deductions rose far more rapidly in NY than the US, presumably reflecting the impact of the SALT cap.
+
+
+```{r decomp_deducts}
+# deduct_other=deduct_used - naz(a04470) - naz(a04475), # non-itemized, non-QBI ded & px
+incdedvars <- c("a00100",
+          "deduct_other",
+          "a04470",
+          "a04475",  # qbi
+          "deduct_used",
+          "a04800"
+          )
+incdedvlabs <- c("Adjusted gross income",
+           "Standard deductions and, for 2017 only, personal/dependent exemptions",
+           "Itemized deductions",
+           "Qualified business income deduction (2018 only)",
+           "Total deductions and exemptions",
+           "Taxable income")
+
+```
+
+
+### Change in $ millions
+```{r decomp_incded_tot}
+ttitle <- "Adjusted gross income, deductions, and taxable income in $ millions"
+tab <- vars_decomp(incdedvars, incdedvlabs, ttitle, meas="value")
+tab
+```
+
+
+
+### Change in average values per return
+```{r decomp_incded_avg}
+ttitle <- "Adjusted gross income, deductions, and taxable income, average values per return in dollars"
+tab <- vars_decomp(incdedvars, incdedvlabs, ttitle, meas="avg")
+tab
+```
+
+## Number of itemizers
+```{r}
+
+ttitle <- "Number of itemizers"
+tab <- nvars_decomp("n04470", "Number of itemizers", ttitle, meas="value")
+tab %>%
+  gtsave(
+    "tab9.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+```
+
+
+
+## Itemized deductions by type
+
+Itemized deductions per taxpayer fell almost twice as much as the national average, driven by the SALT deduction.
+
+Key points:
+
+* Itemized deductions per return fell faster in NY than in the US. In dollar-per-return terms, the decline was almost twice as great as the nation.
+* The SALT deduction, in dollars per return, fell more than twice as much as the national average.
+* However, many New Yorkers undoubtedly were driven to the standard deduction, driving that up more than in the US.
+
+```{r}
+# Total itemized deductions]	a04470		a04470
+# Total medical and dental expense deduction  (after limit)	a17000		a17000
+
+# State and local income taxes 	a18425		a18425
+# State and local general sales taxes 	a18450		a18450
+# Real estate taxes 	a18500		a18500
+# Personal property taxes 	a18800		a18800
+# Limited state and local taxes 			a18460
+# Total taxes paid 	a18300		a18300
+			
+# Home mortgage interest paid 	a19300		a19300
+# Home mortgage interest paid to personal seller 	a19500		a19500
+# Deductible points 	a19530		a19530
+# Qualified mortgage insurance premiums 	a19550		
+			
+# Investment interest paid 	a19570		a19570
+# Total charitable contributions 	a19700		a19700
+# Net limited miscellaneous deduction 	a20800		a20950
+# Gambling loss deduction and other non-limited miscellaneous deduction 	a20950
+
+# salt_uncapped, salt_caploss -- created
+
+# deduct_other=naz(a04470) - naz(a17000) - naz(a18300) - naz(deduct_mortgage)
+# - naz(a19700) - naz(a20800),
+
+
+idvars <- c("a04470",
+          "a17000",
+          "a18300",
+          "id_mortgage",
+          "a19700",
+          "id_other")
+
+idvlabs <- c("Itemized deductions claimed",
+           "Medical deductions, as limited",
+           "SALT deductions, as limited",
+           "Mortgage deduction",
+           "Charitable contributions",
+           "Miscellaneous and other itemized deductions")
+
+# cbind(vars, vlabs)
+```
+
+
+### Change in $ millions
+```{r decomp_itemized_tot}
+ttitle <- "Itemized deductions by type, $ millions"
+tab <- vars_decomp(idvars, idvlabs, ttitle, meas="valuem")
+tab %>%
+  gtsave(
+    "tab10.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+```
+
+
+### Change in average values per return
+```{r decomp_itemized_avg}
+ttitle <- "Itemized deductions by type, average per return in dollars"
+tab <- vars_decomp(idvars, idvlabs, ttitle)
+tab %>%
+  gtsave(
+    "tab11.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+```
+
+## The SALT cap
+
+```{r}
+# Total itemized deductions]	a04470		a04470
+# Total medical and dental expense deduction  (after limit)	a17000		a17000
+
+# State and local income taxes 	a18425		a18425
+# State and local general sales taxes 	a18450		a18450
+# Real estate taxes 	a18500		a18500
+# Personal property taxes 	a18800		a18800
+# Limited state and local taxes 			a18460
+# Total taxes paid 	a18300		a18300
+			
+# Home mortgage interest paid 	a19300		a19300
+# Home mortgage interest paid to personal seller 	a19500		a19500
+# Deductible points 	a19530		a19530
+# Qualified mortgage insurance premiums 	a19550		
+			
+# Investment interest paid 	a19570		a19570
+# Total charitable contributions 	a19700		a19700
+# Net limited miscellaneous deduction 	a20800		a20950
+# Gambling loss deduction and other non-limited miscellaneous deduction 	a20950
+
+# salt_uncapped, salt_caploss -- created
+
+# deduct_other=naz(a04470) - naz(a17000) - naz(a18300) - naz(deduct_mortgage)
+# - naz(a19700) - naz(a20800),
+
+saltvars <- c("a18425",
+          "a18450",
+          "a18500",
+          "a18800",
+          "salt_uncapped",
+          "a18460",
+          "salt_caploss",
+          "a18300",
+          "a04470"
+          )
+
+saltvlabs <- c("SALT income taxes, before limit",
+           "SALT sales taxes, before limit",
+           "SALT real estate taxes, before limit",
+           "SALT personal property taxes, before limit",
+           "TOTAL SALT-defined taxes, before limit",
+           "SALT deduction, as limited",
+           "Deductions lost to the SALT cap",
+           "Total taxes paid deduction, as limited (Schedule A, Line 7, 2018)",
+           "Itemized deductions, claimed"
+           )
+# cbind(vars, vlabs)
+```
+
+
+* The NY SALT deduction declined by $68 billion from 2017 to 2018, from $81 billion to $13 billion.
+* This accounted for the vast majority of the $81 billion year-over-year decline in total itemized deductions.
+* The direct impact of the cap on affected taxpayers was a loss of $32.2 billion. The year-to-year decline was larger than the direct cap impact because many people who formerly claimed itemized deductions now claim standard deductions.
+
+
+### Change in $ millions
+
+```{r decomp_SALT_total}
+ttitle <- "State and local tax deductions, $ millions"
+tab <- vars_decomp(saltvars, saltvlabs, ttitle, meas="valuem")
+tab %>%
+  gtsave(
+    "tab12.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+```
+
+
+### Change in average values per return
+
+```{r decomp_SALT_avg}
+
+ttitle <- "State and local tax deductions, average values per return"
+tab <- vars_decomp(saltvars, saltvlabs, ttitle, meas="avg")
+tab %>%
+  gtsave(
+    "tab13.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+```
+
+
+
+## Effective tax rate changes
+
+### Scatterplot {#scatter}
+```{r }
+# (#sec:Scatter)
+data <- taxagi %>%
+  filter(year %in% 2017:2018, stabbr %in% c("US", state.abb)) %>%
+  select(year, stabbr, agi_stub, aginame, taxpct) %>%
+  pivot_wider(names_from = year, values_from=taxpct) %>%
+  mutate(change=`2018` - `2017`,
+         agi_stub=factor(agi_stub, 
+                         levels=stubs$agi_stub, 
+                         labels=str_wrap(stubs$aginame, 10))) %>%
+  # now create a stub-specific grouping variable
+  group_by(agi_stub) %>%
+  # low rank is most-negative change 1:51
+  mutate(rank=row_number(change),
+         grp=case_when(stabbr=="NY" ~ 1,
+                         stabbr == "US" ~ 2,
+                         stabbr %in% compstates ~ 3,
+                         rank %in% c(1, 2, 50, 51) ~ 4,
+                         TRUE ~ 5),
+         grp=as.factor(grp)) %>%
+  arrange(agi_stub, grp)
+# data
+# levels(data$grp)
+# as.integer(levels(data$agi_stub))
+# as.integer(data$agi_stub)
+
+shift <- 0.15
+textpos <- data %>%
+  filter(grp %in% c("1", "2", "3", "4")) %>%
+  group_by(agi_stub) %>%
+  mutate(nudge=case_when(stabbr %in% c("US", "NY") ~ shift,
+                         change==max(change) ~ shift,
+                         change==min(change) ~ -shift,
+                         TRUE ~ 0.05),
+         nudge=ifelse(stabbr=="NY" & as.integer(agi_stub) %in% c(2, 6), nudge + shift, nudge),
+         x=as.integer(agi_stub) + nudge,
+         y=change) %>%
+  ungroup
+
+p_etrchange <- data %>%
+  # filter(as.integer(agi_stub) != 1) %>%
+  ggplot(aes(agi_stub, change)) +
+  geom_point(colour="darkgrey", size=0.75) +
+      geom_text(aes(x=x, y=y, colour=grp, label=stabbr),
+            size=2.25,
+            fontface = "bold",
+            # nudge_x = 0.1,
+            data=textpos) +
+  scale_colour_manual(values=c("blue", "red", "forestgreen", "forestgreen", NA)) +
+  geom_hline(yintercept = 0) +
+  scale_y_continuous("change, % of adjusted gross income", breaks=seq(-10, 10, .5)) +
+  scale_x_discrete(name=NULL) +
+  ggtitle("Change from 2017 to 2018 in federal income tax liablity as % of adjusted gross income",
+          subtitle="The lower the value, the greater the reduction in tax. Values above 0 are increases.") +
+  theme_bw() +
+  theme(legend.position = "none") # +
+  # labs(caption="Caution: Adjusted gross income definition has changed across years") +
+  # theme(plot.caption = element_text(hjust=0, size=rel(.8)))
+ggsave(here::here("images", "etrchange.png"), plot=p_etrchange, width=7, height=7, units="in", scale=1.5, dpi=500)
+
+```
+
+
+```{r pre_calculated_figures, echo=FALSE, fig.height=9, fig.width=9, out.height='100%', out.width='100%'}
+p_etrchange
+```
+
+### Data used for the scatterplot
+```{r rows.print = 52}
+data
+write_csv(data %>% ungroup %>% select(-agi_stub), here::here("results", "scatterplot_data.csv"))
+```
+
+
+
+### Map of changes in effective tax rates for all taxpayers {#map_start}
+
+```{r color_check, eval=FALSE, include=FALSE}
+display.brewer.all()
+# display.brewer.pal(n, name)
+# brewer.pal(n, name) # 2. Return the hexadecimal color code of the palette
+
+display.brewer.pal(n = 8, name = 'Dark2')
+display.brewer.pal(n = 3, name = 'Blues')
+display.brewer.pal(n = 3, name = 'Reds')
+brewer.pal(n = 8, name = 'Dark2')
+# scale_fill_brewer() for box plot, bar plot, violin plot, dot plot, etc
+# scale_color_brewer() for lines and points
+brewer.pal(n = 3, name = 'Blues')[2:3]
+display.brewer.pal(n = 3, name = 'Blues')
+
+```
+
+
+```{r mapdata, include=FALSE}
+mapdata <- taxagi %>%
+  filter(year %in% 2017:2018, stabbr %in% c("US", state.abb)) %>%
+  select(year, stabbr, agi_stub, aginame, taxpct) %>%
+  pivot_wider(names_from = year, values_from=taxpct) %>%
+  mutate(change=`2018` - `2017`)
+
+# count(mapdata, agi_stub, aginame)
+
+```
+
+
+The figure below maps the change in effective federal tax rate for all taxpayers. The states with the largest decline are deepest red and those with the smallest decline are deepest blue. As expected, states with lower state and local taxes (e.g., Florida) have the largest federal tax reductions.
+
+
+```{r mapstub0, echo=FALSE}
+dfsub <- mapdata %>% filter(agi_stub==0)
+# dfsub %>% arrange(change)
+
+# define cuts 
+# quantile(dfsub$change)
+cutpoints <- c(-Inf, -1.75, -1.5, -1.25, -1, Inf)
+cutlabs <- c("< -1.75%", 
+             "-1.75% to < -1.50%", 
+             "-1.50% to < -1.25%", 
+             "-1.25% to < -1.00%",
+             "-1.00% or higher")
+cutvals <- cut(dfsub$change, cutpoints, right=FALSE)
+# table(cutvals) %>% as.data.frame()
+
+
+# cbind(cutlabs, table(cutvals) %>% as.data.frame())
+
+blue2 <- brewer.pal(n = 3, name = 'Blues')[2:3]
+red2 <- brewer.pal(n = 3, name = 'Reds')[2:3]
+clrs <- c(red2 %>% rev, "lightgrey", blue2)
+
+p <- statemap(dfsub, mapvar="change", 
+         cutpts=cutpoints, cutlabels=cutlabs,
+         map_colors=clrs, 
+         map_title="Change in federal effective tax rate from 2017 to 2018, all taxpayers",
+         map_subtitle="Effective tax rate defined as federal tax liability as % of adjusted gross income",
+         legend_title="Change in effective rate")
+p
+
+# ggsave(here::here("results", "rqtax_v_2010_map.png"), plot=p, width=16, height=9, scale=.7)
+
+```
+
+### Data used for the map of changes in effective tax rates for all taxpayers
+```{r rows.print = 52}
+dfsub
+```
+
+
+
+### Map of changes for taxpayers in the $100-200k AGI range
+
+The next map shows the change for taxpayers with adjusted gross incomes in the $100k to $200k range. Caution: I have used different cutpoints in this map than in the first to keep the number of states in each group reasonably distributed.
+
+```{r mapstub7, echo=FALSE}
+dfsub <- mapdata %>% filter(agi_stub==7)
+# dfsub %>% arrange(change)
+
+# define cuts 
+# quantile(dfsub$change)
+cutpoints <- c(-Inf, -2.00, -1.75, -1.5, -1.25, Inf)
+cutlabs <- c("< -2.00%", 
+             "-2.00% to < -1.75%", 
+             "-1.75% to < -1.50%", 
+             "-1.50% to < -1.25%", 
+             "-1.25% or higher")
+
+# cutpoints <- c(-Inf, -1.75, -1.5, -1.25, -1, Inf)
+# cutlabs <- c("< -1.75%", 
+#              "-1.75% to < -1.50%", 
+#              "-1.50% to < -1.25%", 
+#              "-1.25% to < -1.00%",
+#              "-1.00% or higher")
+
+cutvals <- cut(dfsub$change, cutpoints, right=FALSE)
+# table(cutvals) %>% as.data.frame()
+# cbind(cutlabs, table(cutvals) %>% as.data.frame())
+
+blue2 <- brewer.pal(n = 3, name = 'Blues')[2:3]
+red2 <- brewer.pal(n = 3, name = 'Reds')[2:3]
+clrs <- c(red2 %>% rev, "lightgrey", blue2)
+
+p <- statemap(dfsub, mapvar="change", 
+         cutpts=cutpoints, cutlabels=cutlabs,
+         map_colors=clrs, 
+         map_title="Change in federal effective tax rate\nfrom 2017 to 2018, $100-200k income range",
+         map_subtitle="Effective tax rate defined as federal tax liability as % of adjusted gross income",
+         legend_title="Change in effective rate")
+p
+
+# ggsave(here::here("results", "rqtax_v_2010_map.png"), plot=p, width=16, height=9, scale=.7)
+
+```
+
+
+### Data used for the map of changes for taxpayers in the $100-200k AGI range
+```{r rows.print = 52}
+dfsub
+```
+
+# Counties
+```{r ONETIME_save_counties, eval=FALSE}
+# https://www.irs.gov/statistics/soi-tax-stats-county-data
+# 16cyallagi.csv
+
+# Tax liability after credits definition 10/30/2020
+# Calculated as:
+#   A10300	Total tax liability amount [11]  
+#     minus the refundable credits 1040:15
+#       A59720	Excess earned income credit (refundable) amount [10]  	1040:17a
+#       A11070	Additional child tax credit amount	1040:17b
+#       A10960	Refundable education credit amount	1040:17c
+#  refcredits = naz(a59720) + naz(a11070) + naz(a10960)
+#  taxac = a10300 - refcredits
+
+# df <- read_csv(here::here("ignore", "countiesSOI", "16incyallagi.csv"))
+
+df2016 <- read_csv(here::here("ignore", "countiesSOI", "16incyallnoagi.csv")) %>% 
+  mutate(year=2016)
+df2017 <- read_csv(here::here("ignore", "countiesSOI", "17incyallnoagi.csv")) %>%
+  mutate(year=2017)
+df2018 <- read_csv(here::here("ignore", "countiesSOI", "18incyallnoagi.csv")) %>%
+  mutate(year=2018)
+
+glimpse(df2016)  # fips dbl, 
+glimpse(df2017) # fips zp2, zp3
+glimpse(df2018) # fips zp2, zp3
+
+df <- bind_rows(df2016 %>% mutate(STATEFIPS=str_pad(STATEFIPS, width=2, side="left", pad="0"),
+                                  COUNTYFIPS=str_pad(COUNTYFIPS, width=3, side="left", pad="0")),
+                df2017, df2018) %>%
+  setNames(str_to_lower(names(.)))
+saveRDS(df, here::here("data", "counties", "counties.rds"))
+
+```
+
+
+```{r nyregions}
+# Capital	Albany, Columbia, Greene, Rensselaer, Saratoga, Schenectady, Warren, and Washington	Unchanged
+# Central NY	Cayuga, Cortland, Madison, Onondaga, and Oswego	Gained Madison County.
+# Finger Lakes	Genesee, Livingston, Monroe, Ontario, Orleans, Seneca, Wayne, Wyoming, and Yates	Unchanged
+# Hudson Valley	Dutchess, Orange, Putnam, Rockland, Sullivan, Ulster, and Westchester	Unchanged
+# Long Island	Nassau and Suffolk	Unchanged
+# Mohawk Valley	Fulton, Herkimer, Montgomery, Oneida, Otsego, and Schoharie	Gained Otsego County and lost Madison County
+# New York City	Bronx, Kings, New York, Queens, and Richmond	Unchanged
+# North Country	Clinton, Essex, Franklin, Hamilton, Jefferson, Lewis, and St. Lawrence	Unchanged
+# Southern Tier	Broome, Chemung, Chenango, Delaware, Schuyler, Steuben, Tioga, and Tompkins	Lost Otsego County
+# Western NY	Allegany, Cattaraugus, Chautauqua, Erie, and Niagara	Unchanged
+
+capdist <- c("Albany", "Columbia", "Greene", "Rensselaer", "Saratoga", "Schenectady", "Warren", "Washington")
+centny <- c("Cayuga", "Cortland", "Madison", "Onondaga", "Oswego")
+flakes <- c("Genesee", "Livingston", "Monroe", "Ontario", "Orleans", "Seneca", "Wayne", "Wyoming", "Yates")
+li <- c("Nassau", "Suffolk")
+mh <- c("Dutchess", "Orange", "Putnam", "Rockland", "Sullivan", "Ulster", "Westchester")  # Mid-Hudson
+mv <- c("Fulton", "Herkimer", "Montgomery", "Oneida", "Otsego", "Schoharie")
+nyc <- c("Bronx", "Kings", "New York", "Queens", "Richmond")
+northco <- c("Clinton", "Essex", "Franklin", "Hamilton", "Jefferson", "Lewis", "St. Lawrence")
+stier <- c("Broome", "Chemung", "Chenango", "Delaware", "Schuyler", "Steuben", "Tioga", "Tompkins")
+westny <- c("Allegany", "Cattaraugus", "Chautauqua", "Erie", "Niagara")
+
+regions <- tibble(cname=c(capdist, centny, flakes, li, mh, mv, nyc, northco, stier, westny, "New York State")) %>%
+  mutate(region=case_when(cname %in% capdist ~ "Capital District",
+                          cname %in% centny ~ "Central New York",
+                          cname %in% flakes ~ "Finger Lakes",
+                          cname %in% li ~ "Long Island",
+                          cname %in% mh ~ "Mid-Hudson",
+                          cname %in% mv ~ "Mohawk Valley",
+                          cname %in% nyc ~ "New York City",
+                          cname %in% northco ~ "North Country",
+                          cname %in% stier ~ "Southern Tier",
+                          cname %in% westny ~ "Western New York",
+                          cname == "New York State" ~ "New York State",
+                          TRUE ~ "ERROR"))
+
+saveRDS(regions, here::here("data", "regions.rds"))
+
+```
+
+
+
+```{r rows.print=63}
+regions <- readRDS(here::here("data", "regions.rds"))
+
+counties <- readRDS(here::here("data", "counties", "counties.rds"))
+nyco <- counties %>%
+  filter(state=="NY") %>%
+  select(year, countyfips, countyname, n1, a00100, a10300, a59720, a11070, a10960) %>%
+  mutate(countyname=ifelse(countyfips=="000", "New York State", countyname),
+         cname=str_remove(countyname, " County")) %>%
+  left_join(regions, by="cname") %>%
+  mutate(refcredits = naz(a59720) + naz(a11070) + naz(a10960),
+         taxac = a10300 - refcredits,
+         etr=taxac / a00100 * 100)
+
+count(nyco, region, countyname) %>% as.data.frame
+
+# nyco %>% filter(countyfips=="000")
+# nyco %>% filter(year==2018)
+
+nyrgn <- nyco %>%
+  select(-c(countyfips, countyname, cname, etr)) %>%
+  group_by(year, region) %>%
+  summarise(across(c(a00100, taxac), ~sum(.x, na.rm=TRUE)), .groups = "drop") %>%
+  mutate(etr=taxac / a00100 * 100)
+
+rgnetr <- nyrgn %>%
+  select(year, region, etr) %>%
+  pivot_wider(names_from = year, values_from = etr) %>%
+  mutate(chg2016_2017=`2017` - `2016`,
+         chg2017_2018=`2018` - `2017`,
+         grp=ifelse(region=="New York State", 1, 2)) %>%
+  arrange(grp, region)
+
+  
+#  refcredits = naz(a59720) + naz(a11070) + naz(a10960)
+#  taxac = a10300 - refcredits
+
+```
+
+
+```{r region_etr}
+tab <- rgnetr %>%
+  select(-grp) %>%
+  gt() %>%
+  tab_header(
+    title = "Effective tax rates by region of New York State"
+  ) %>%
+  cols_label(region="Region",
+             chg2016_2017=html("2017<br>minus<br>2016"),
+             chg2017_2018=html("2018<br>minus<br>2017")
+             ) %>%
+  fmt_percent(
+    columns = c("2016", "2017", "2018", "chg2016_2017", "chg2017_2018"),
+    scale_values = FALSE,
+    decimals = 1
+  ) %>%
+  tab_style(
+    style = list(
+      cell_fill(color = "#f7f7f7")
+    ),
+    locations = cells_body(
+      rows=seq(2, 11, 2)
+    )
+  ) %>%
+  tab_footnote(
+    footnote = "Data for New York State from this source may differ slightly from state data in tables above due to differences in IRS source data",
+    locations = cells_column_labels( 
+      columns = vars(region)
+      )
+    ) %>%
+  tab_source_note(
+      source_note = "https://www.irs.gov/statistics/soi-tax-stats-county-data"
+      )
+tab %>%
+  gtsave(
+    "tab14.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+
+```
+
+
+
+
+
+# Appendix I: Selected data tables
+
+## Percentage change in total federal income tax liability after refundable credits from 2017 to 2018, all states ranked
+
+This table shows the percent change in total federal income tax liability from 2017 to 2018, sorted from largest percentage reduction to largest increase. New York is ranked #44 out of 51 (including DC).
+
+```{r rows.print = 52}
+tab <- taxliab %>%
+  filter(agi_stub==0) %>%
+  select(stabbr, stname, pd2018_2017) %>%
+  mutate(grp=(stabbr %in% c("US", "USxNY"))) %>%
+  group_by(grp) %>%
+  mutate(rank=rank(pd2018_2017),
+         rank=ifelse(stabbr %in% c("US", "USxNY"), NA_real_, rank)) %>%
+  ungroup %>%
+  select(-grp, -stabbr) %>%
+  arrange(pd2018_2017) %>%
+  gt() %>%
+  tab_header(
+    title = "Percent change in total federal income tax liability between 2017 and 2018"
+  ) %>%
+  cols_label(
+    pd2018_2017 = html("% change")
+  ) %>%
+  fmt_percent(
+    columns = starts_with(c("pd")),
+    scale_values = FALSE,
+    decimals = 1
+  ) %>%
+  fmt_number(
+    columns = "rank",
+    decimals = 0,
+    suffixing = FALSE
+  ) %>%
+  cols_align(align = c("left"), columns = "stname")
+tab %>%
+  gtsave(
+    "tab15.html", inline_css = TRUE,
+    path = here::here("results/tables")
+  )
+tab
+
+
+```
+
+## Selected data for reference: Changes in federal income tax liability for NY, the US, 50 states, and DC by income range
+
+This table is like the NY and US tables above, but will all states. It is filterable and sortable so that you can look at subsets. For example:
+
+1.  To see total 2018 liability sorted by size from large to small:
+   +  Click the box under agi_stub. A slider will appear. Move the right slider from 10 to 0, so that only agi_stub 0 (all income ranges -- i.e., the total) will be shown.
+   +  Click the arrows next to TY2018 to sort by tax-year 2018 values.
+2.  To see percent change in liability of millionaires from 2017 to 2018 for millionaires sorted:
+   +  Clear the boxes from the first exercise
+   +  Click in the agi_stub box and move the left slider from 0 to 10, so that only agi_stub 10 will be shown
+   +  Click the arrows next to the label "% change 2017 to 2018" to sort
+3.  To see just the data for California
+   +  Clear the boxes from the first exercise
+   +  Click in the stabbr (state abbreviation) box and type "CA"
+
+...and so on.
+
+```{r rows.print = 11}
+tabstab(c("US", state.abb, "DC"))
+
+```
+
+
+
+Tables below provide details by income range followed by states ranked by percentage change in average tax.
+
+
+## Percent changes in # of taxpayers, average income tax after refundable credits, and total tax after refundable credits, NY and the US
+
+The following table has three sets of columns to the right of the income-group labels, each with 3 columns, as follows:
+
+* The first set of 3 columns gives the percent change from 2017 to 2018 for NY in:
+  + Number of taxpayers
+  + Average tax
+  + Total income tax after credits
+
+* The second set of 3 columns gives the same percent changes for the US
+
+* The third set of 3 columns gives the percent change for NY minus the percent change for the US
+
+
+
+```{r rows.print = 11}
+
+data <- decomp %>%
+  filter(stabbr %in% c("NY", "US"),
+         measure %in% c("n1", "avg", "valuem"),
+         varname == "taxac",
+         year %in% 2018) %>%
+  select(-value, -year, -varname, -stname, -diff) %>%
+  unite("stmeas", stabbr, measure) %>%
+  pivot_wider(names_from = stmeas, values_from = pch) %>%
+  rename(NY_taxtot=NY_valuem,
+         US_taxtot=US_valuem) %>%
+  mutate(diff_n1=NY_n1 - US_n1,
+         diff_avg=NY_avg - US_avg,
+         diff_taxtot=NY_taxtot - US_taxtot) %>%
+  mutate(across(-c(agi_stub, aginame), ~ round(., 1)))
+
+data %>%
+  gt() %>%
+  tab_header(
+    title = "Decomposing % change in federal income tax liability between 2017 and 2018",
+    subtitle = "All numbers in table are % changes from 2017 to 2018"
+  ) %>%
+  tab_spanner(
+    label = "New York",
+    columns = vars(NY_n1, NY_avg, NY_taxtot)
+  ) %>%
+  tab_spanner(
+    label = "United States",
+    columns = vars(US_n1, US_avg, US_taxtot)
+  ) %>%
+  tab_spanner(
+    label = "New York minus United States",
+    columns = vars(diff_n1, diff_avg, diff_taxtot)
+  ) %>%
+  cols_label(
+    NY_n1="# of returns",
+    US_n1="# of returns",
+    diff_n1="# of returns",
+    NY_avg="average tax",
+    US_avg="average tax",
+    diff_avg="average tax",
+    NY_taxtot="total liability",
+    US_taxtot="total liability",
+    diff_taxtot="total liability"
+  )  %>% 
+  tab_style(
+    style = list(
+      cell_borders(sides = "left", color = "#000000", style = "solid", weight = px(1))
+    ),
+    locations =list(
+      cells_body(columns = c(6, 9)),
+      cells_column_labels(columns = c(6, 9)),
+      cells_column_spanners(spanners=c("United States",
+                                       "New York minus United States")))
+) %>% 
+  tab_style(
+    style = list(
+      cell_fill(color = "#f7f7f7")
+    ),
+    locations = cells_body(
+      rows = seq(1, nrow(data), 2))
+  )
+
+
+```
+
+## Percentage change in average federal income tax liability after refundable credits from 2017 to 2018, all states ranked
+
+This table shows the percent change in average federal income tax liability after refundable credits from 2017 to 2018, sorted from largest percentage reduction to largest increase.
+
+```{r}
+
+```
+
+
+```{r rows.print = 52}
+decomp %>%
+  filter(agi_stub==0, year==2018, varname=="taxac", measure=="avg") %>%
+  select(stabbr, stname, pch) %>%
+  mutate(grp=stabbr=="US") %>%
+  group_by(grp) %>%
+  mutate(rank=rank(pch),
+         rank=ifelse(stabbr=="US", NA_real_, rank)) %>%
+  ungroup %>%
+  select(-grp, -stabbr) %>%
+  arrange(pch) %>%
+  gt() %>%  tab_header(
+    title = "Percent change in average federal income tax liability between 2017 and 2018"
+  ) %>%
+  cols_label(
+    pch = html("% change")
+  ) %>%
+  fmt_percent(
+    columns="pch",
+    scale_values = FALSE,
+    decimals = 1
+  ) %>%
+  fmt_number(
+    columns = "rank",
+    decimals = 0,
+    suffixing = FALSE
+  )
+
+```
+
+
+## Decomposing the decline in average tax rates
+
+
+```{r rows.print = 11}
+
+# let's get pch avg tax, TI, and tax_ti
+# glimpse(decomp)
+# count(decomp, varname)
+# count(decomp, measure)
+data <- decomp %>%
+  filter(stabbr %in% c("NY", "US"),
+         varname %in% c("tiagi_pct", "taxti_pct",  "taxagi_pct"),
+         measure == "value",
+         year %in% 2018) %>%
+  select(stabbr, agi_stub, aginame, varname, pch) %>%
+  unite("stvar", stabbr, varname) %>%
+  pivot_wider(names_from = stvar, values_from = pch) %>%
+  select(agi_stub, aginame, 
+         NY_tiagi_pct, NY_taxti_pct, NY_taxagi_pct, 
+         US_tiagi_pct, US_taxti_pct, US_taxagi_pct) %>%
+  mutate(diff_tiagi_pct=NY_tiagi_pct - US_tiagi_pct,
+         diff_taxti_pct=NY_taxti_pct - US_taxti_pct,
+         diff_taxagi_pct=NY_taxagi_pct - US_taxagi_pct)
+
+data %>%
+  gt() %>%
+  tab_header(
+    title = "Decomposing % change in effective federal income tax rate between 2017 and 2018",
+    subtitle = "All numbers in table are % changes from 2017 to 2018"
+  ) %>%
+  tab_spanner(
+    label = "New York",
+    columns = vars(NY_tiagi_pct, NY_taxti_pct, NY_taxagi_pct)
+  ) %>%
+  tab_spanner(
+    label = "United States",
+    columns = vars(US_tiagi_pct, US_taxti_pct, US_taxagi_pct)
+  ) %>%
+  tab_spanner(
+    label = "New York minus United States",
+    columns = vars(diff_tiagi_pct, diff_taxti_pct, diff_taxagi_pct)
+  ) %>%
+  cols_label(
+    NY_tiagi_pct=html("taxable income<br>as % of AGI"),
+    US_tiagi_pct=html("taxable income<br>as % of AGI"),
+    diff_tiagi_pct=html("taxable income<br>as % of AGI"),
+    
+    NY_taxti_pct=html("tax liability<br>as % of taxable income"),
+    US_taxti_pct=html("tax liability<br>as % of taxable income"),
+    diff_taxti_pct=html("tax liability<br>as % of taxable income"),
+    
+    NY_taxagi_pct=html("tax liability<br>as % of AGI"),
+    US_taxagi_pct=html("tax liability<br>as % of AGI"),
+    diff_taxagi_pct=html("tax liability<br>as % of AGI")
+  ) %>% 
+  fmt_number(
+    columns = starts_with(c("NY", "US", "diff")),
+    decimals = 1,
+    suffixing = FALSE
+  ) %>%
+  tab_style(
+    style = list(
+      cell_borders(sides = "left", color = "#000000", style = "solid", weight = px(1))
+    ),
+    locations =list(
+      cells_body(columns = c(6, 9)),
+      cells_column_labels(columns = c(6, 9)),
+      cells_column_spanners(spanners=c("United States",
+                                       "New York minus United States")))
+) %>% 
+  tab_style(
+    style = list(
+      cell_fill(color = "#f7f7f7")
+    ),
+    locations = cells_body(
+      rows = seq(1, nrow(data), 2))
+  )
+
+
+
+```
+
+
+
+
+```{r rows.print = 11}
+
+# let's get pch avg tax, TI, and tax_ti
+
+data <- decomp %>%
+  filter(stabbr %in% c("NY", "US"),
+         varname %in% c("taxti_pct", "deductagi_pct"),
+         measure == "value",
+         year %in% 2018) %>%
+  select(-value, -year, -stname, -value, -pch) %>%
+  unite("stvar", stabbr, varname) %>%
+  pivot_wider(names_from = stvar, values_from = diff) %>%
+  select(agi_stub, aginame, NY_taxti_pct, US_taxti_pct, NY_deductagi_pct, US_deductagi_pct) %>%
+  mutate(diff_taxti_pct=NY_taxti_pct - US_taxti_pct,
+         diff_deductagi_pct=NY_deductagi_pct - US_deductagi_pct)
+
+data %>%
+  gt() %>%
+  tab_header(
+    title = "Decomposing % change in federal income tax liability between 2017 and 2018",
+    subtitle = "All numbers in table are % changes from 2017 to 2018"
+  ) %>%
+  tab_spanner(
+    label = "Change in tax liability as % of taxable income",
+    columns = vars(NY_taxti_pct, US_taxti_pct, diff_taxti_pct)
+  ) %>%
+  tab_spanner(
+    label = "Change in deductions as % of adjusted gross income",
+    columns = vars(NY_deductagi_pct, US_deductagi_pct, diff_deductagi_pct)
+  ) %>%
+  cols_label(
+    NY_taxti_pct="NY",
+    US_taxti_pct="US",
+    diff_taxti_pct=md("NY change<br>minus<br>US change"),
+    NY_deductagi_pct="NY",
+    US_deductagi_pct="US",
+    diff_deductagi_pct=md("NY change<br>minus<br>US change")
+    )  %>% 
+  tab_style(
+    style = list(
+      cell_borders(sides = "left", color = "#000000", style = "solid", weight = px(1))
+    ),
+    locations =list(
+      cells_body(columns = c(5)),
+      cells_column_labels(columns = c(6)),
+      cells_column_spanners(spanners=c("Change in deductions as % of adjusted gross income")))
+    ) %>%
+  fmt_number(
+    columns = contains("pct"),
+    #rows=1,
+    decimals = 1,
+    pattern = " {x}%",
+    suffixing = FALSE
+  ) %>% 
+  tab_style(
+    style = list(
+      cell_fill(color = "#f7f7f7")
+    ),
+    locations = cells_body(
+      rows = seq(1, nrow(data), 2))
+  )
+
+
+```
+
+
+# Appendix II: Notes and definitions {#app2}
+
+## Data
+
+The data in this report on federal income tax liability by state come from the IRS [Statistics of Income branch, Historical Table 2](https://www.irs.gov/statistics/soi-tax-stats-historic-table-2). The data I used cover tax years 2012 through 2018, but most of the analysis focuses primarily on changes between 2017 and 2018.
+
+
+## Definition of the United States
+For consistency with other work by the Office of the State Comptroller, I defined the United States as the 50 states plus the District of Columbia, which means I excluded from all totals Puerto Rico and what the IRS calls "Other Areas" (for example, returns filed from Army Post Office and Fleet Post Office addresses by members of the armed forces). Thus, the numbers repored for the United States in this report will be slightly smaller than numbers in the original IRS source documents. The excluded areas accounted for 0.4% of federal income tax liability in 2018.
+
+
+## Definition of total income tax liability after refundable credits
+The measure of total income tax liability after refundable credits reflects the following calculation:
+
+*  Total income tax liability after nonrefundable credits but before refundable credits, as reported on line 15 of IRS Form 1040 for 2018. Per IRS documentation, in addition to the regular income tax, this includes "the taxes from recapture of certain prior-year credits, tax applicable to individual retirement arrangements (IRA's), social security taxes on self-employment income and on certain tip income, advanced earned income payments, household employment taxes, and certain other taxes listed in the Form 1040 instructions."
+
+*  Minus the sum of the following refundable credits:
+    + Excess earned income credit (refundable portion of the EIC)
+    + Additional refundable child tax credit
+    + Refundable education tax credit
+    
+Except where noted otherwise, this broad measure of income tax liability is used for tax calculations in this report.
+
+
+## The effective tax rate measure
+
+Much of the analysis below relies on a measure of effective tax rates: federal income tax liability after refundable credits as a percentage of adjusted gross income. I examine changes in this measure over time, and differences across states and income ranges.
+
+It is not a perfect apples-to-apples comparison for several reasons:
+
+* There are many reasons for changes from one year to the next - people may have shifted income between years of have had economic changes that affected the measures. It is not the same as calculating 2017 tax law and 2018 tax law on the same exact data, which we will do in the second part of this project.
+
+* The definition of AGI may have had some changes across years although I do not think that will have a big impact on results.
+
+* AGI is an imperfect measure of income or economic resources, but it's the only one we have available to us here.
+
+Within these limitations, it is a reasonable indicator of how federal income tax liability changed between 2017 and 2018. Ultimately, microdata that allow applying 2017 and 2018 law to a single set of data will provide improved measures of the impact of the new tax law.
+
+
+## Relationship of tax liability to tax receipts on a federal fiscal year basis
+
+Federal income tax liability reported on tax returns is related to, but not the same as, federal income tax receipts used to finance federal spending. Comparisons of liability totals to budgetary receipts will uncover differences for several reasons. For example:
+
+*  Tax liability is measured on a tax year basis, which for most taxpayers is a calendar year, while tax receipts are measured on a federal fiscal year basis, a year that ends in September. A substantial share of federal tax liability for a calendar year is paid in the following federal fiscal year, when tax returns are filed. For example, tax returns for the 2018 tax year were filed in April 2019, which fell in the 2018-19 federal fiscal year. Because New York's share of 2018 tax liability rose, its estimated share of federal fiscal year 2018-19 tax receipts also may rise under methodologies commonly used to estimate receipts by state.
+
+*  Federal income tax receipts include amounts that are not part of the tax liability definition used in this report, such as self-employment taxes.
+
+*  Tax receipts include amounts unrelated to current liability such as amounts paid on audit, amounts from prior tax years paid late, delinquency payments in response to letters from the IRS and so on.
+

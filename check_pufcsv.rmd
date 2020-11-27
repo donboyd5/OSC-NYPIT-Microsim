@@ -1,0 +1,232 @@
+---
+title: "Check puf csv"
+author: "Don Boyd"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    number_sections: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+
+<!-- 
+
+<style type="text/css">
+div.main-container {
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+  html_document:
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    toc_depth: 5
+editor_options:
+  chunk_output_type: console or inline    
+  
+  html_document:
+    toc: yes
+    df_print: paged
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+    
+-->
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(width = 150)
+```
+
+
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# source(here::here("includes", "libraries.r"))
+library(tidyverse)
+# if more than 60 rows, print 60 - enough for states
+options(tibble.print_max = 60, tibble.print_min = 60) 
+library(scales)
+library(readxl)
+
+library(arrow)
+
+library(RColorBrewer)
+
+library(maps)
+library(usmap)
+library(grid)
+library(gridExtra)
+
+library(btools) # Matt, get from my github page if needed
+# library(bdata) # Matt, get from my github page if needed
+library(ggrepel)
+library(gt)
+library(glue)
+library(DT)
+library(knitr)
+library(kableExtra)
+library(btools)
+library(bdata)
+
+devtools::session_info()
+
+```
+
+
+```{r locations}
+tcout <- r"(C:\programs_python\puf_analysis\ignore\taxcalc_output\)"
+
+puf2017 <- "pufcsv_2017law.parquet"
+puf2018 <- "pufcsv_2018law.parquet"
+
+```
+
+
+```{r}
+# keepvars <- c("RECID", "s006", "c00100", "iitax", "taxbc")
+# df2017 <- read_parquet(paste0(tcout, puf2017), col_select = all_of(keepvars))
+
+df2017 <- read_parquet(paste0(tcout, puf2017))
+df2018 <- read_parquet(paste0(tcout, puf2018))
+
+# check that tax totals are correct
+df2017 %>% summarise(wtax=sum(s006 * iitax))
+df2018 %>% summarise(wtax=sum(s006 * iitax))
+
+# get RECIDs of 2017-agi-definition millionaires with large weighted tax increases
+recs2017 <- df2017 %>%
+  filter(c00100 > 1e6) %>%
+  select(RECID, s006, c00100, iitax) %>%
+  mutate(law="law2017") %>%
+  arrange(RECID)
+
+recs2018<- df2018 %>%
+  filter(RECID %in% recs2017$RECID) %>%
+  select(RECID, s006, c00100, iitax) %>%
+  mutate(law="law2018") %>%
+  arrange(RECID)
+
+sum(recs2017$s006)
+sum(recs2018$s006)
+
+diffs <- recs2017 %>%
+  select(RECID, s006, c00100, iitax2017=iitax) %>%
+  left_join(recs2018 %>% select(RECID, iitax2018=iitax),
+            by="RECID") %>%
+  mutate(diff=iitax2018 - iitax2017,
+         wdiff=s006 * diff,
+         wincrease = wdiff * (wdiff >0))
+
+# % of millionaire records that had a tax increase:
+nrow(diffs %>% filter(diff > 0)) / nrow(diffs) * 100  # 43%
+# % of millionaire weighted records that had a tax increase:
+sum(diffs$s006) / sum(recs2017$s006) * 100  # 39%
+
+qtiles <- c(0, .01, .05, .1, .25, .5, .75, .9, .95, .99, 1)
+quantile(diffs$diff, qtiles)
+quantile(diffs$wdiff, qtiles)
+
+sum(diffs$wdiff) / 1e9  # $3.8 billion net increase
+sum(diffs$wincrease) / 1e9  # $16.4 billion tax increase among those with increases
+
+
+
+diffs %>%
+  arrange(-wdiff) %>%
+  mutate(cumwdiff=cumsum(wincrease),
+         cumpctwdiff=cumwdiff / sum(wincrease) * 100)
+# the phenomenon is widespread - we need to get to roughly 500 records with the greatest weighted increases
+# before we have 50% of the total increase
+
+
+```
+
+```{r}
+# create a comparison file for those who had large weighted tax increases
+recids <- diffs %>%
+  filter(diff > 0) %>%
+  arrange(-wdiff) %>%
+  # filter(row_number() <= 100) %>%
+  .$RECID
+
+comp <- bind_rows(
+  df2017 %>% filter(RECID %in% recids) %>% mutate(law="law2017"),
+  df2018 %>% filter(RECID %in% recids) %>% mutate(law="law2018")) %>%
+  pivot_longer(-c(RECID, law, s006), names_to = "variable") %>%
+  pivot_wider(names_from = "law") %>%
+  mutate(diff=law2018 - law2017,
+         wdiff=diff * s006)
+
+check <- comp %>%
+  filter(diff != 0) %>%
+  arrange(RECID, -wdiff)
+
+check %>%
+  group_by(variable) %>%
+  summarise(diffsum=sum(diff), .groups="drop") %>%
+  arrange(-diffsum)
+
+check %>%
+  group_by(variable) %>%
+  summarise(nnz=n(),
+            nnz_wtd=sum(s006),
+            diffsum=sum(diff),
+            diffsum_wtd=sum(wdiff),
+            .groups="drop") %>%
+  arrange(-diffsum_wtd) %>%
+  kable(digits=0, format.args=list(big.mark=","))
+  
+
+check1 <- comp %>%
+  arrange(RECID, -diff) %>%
+  filter(RECID==recids[1])
+
+check2 <- comp %>%
+  arrange(RECID, -diff) %>%
+  filter(RECID==recids[2])
+
+check3 <- comp %>%
+  arrange(RECID, -diff) %>%
+  filter(RECID==recids[3])
+
+```
+
+
+```{r cgcalcs}
+comp
+#e00650, c01000, c23650, p23250, e01100, e58990, e00200, e24515, e24518, MARS, c04800, c05200, e00900, e26270, e02000, c05700
+# , , , , , , , MARS, , , , , , 
+
+cgvars <- c("e00650", "c01000", "c23650", "p23250", "e01100", "e58990", "e00200", "e24515",
+            "e24518", "c04800", "c05200", "e00900", "e26270", "e02000", "c05700",
+            "c24510")
+comp %>% 
+  filter(str_detect(variable, "dwks") | (variable %in% cgvars)) %>%
+  mutate(law2017=s006 * law2017,
+         law2018=s006 * law2018) %>%
+  group_by(variable) %>%
+  summarise(wtd_nnz_2017=sum(s006 * (law2017!=0)),
+            wtd_nnz_diff=sum(s006 * (diff!=0)),
+            law2017=sum(law2017) / 1e9,
+            law2018=sum(law2018) / 1e9,
+            wdiff=sum(wdiff) / 1e9,
+            .groups="drop") %>%
+  # summarise(across(c(law2017, law2018, wdiff), ~ sum(.x)), .groups="drop") %>%
+  arrange(-law2017) %>%
+  kable(digits=c(0, 0, 0, 1, 1, 1), format.args=list(big.mark=","))
+
+```
+
+
+
+

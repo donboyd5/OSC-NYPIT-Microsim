@@ -1,0 +1,705 @@
+---
+title: "Analysis of tax-calculator output"
+author: "Don Boyd"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_notebook: 
+    df_print: paged
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    number_sections: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+
+<!-- 
+
+<style type="text/css">
+div.main-container {
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+  html_document:
+    fig_height: 6
+    fig_width: 8
+    toc: yes
+    toc_depth: 5
+editor_options:
+  chunk_output_type: console or inline    
+  
+  html_document:
+    toc: yes
+    df_print: paged
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+    
+-->
+
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+options(width = 150)
+```
+
+
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# source(here::here("includes", "libraries.r"))
+library(tidyverse)
+# if more than 60 rows, print 60 - enough for states
+options(tibble.print_max = 60, tibble.print_min = 60) 
+library(scales)
+library(readxl)
+
+library(arrow)
+
+library(RColorBrewer)
+
+library(maps)
+library(usmap)
+library(grid)
+library(gridExtra)
+
+library(btools) # Matt, get from my github page if needed
+# library(bdata) # Matt, get from my github page if needed
+library(ggrepel)
+library(gt)
+library(glue)
+library(DT)
+library(knitr)
+library(kableExtra)
+library(btools)
+library(bdata)
+
+devtools::session_info()
+
+```
+
+
+```{r locations}
+# define states of interest
+
+tcout <- r"(C:\programs_python\puf_analysis\ignore\taxcalc_output\)"
+wtdir <- r"(C:\programs_python\puf_analysis\ignore\puf_versions\)"
+
+wtfname <- "allweights2018_geo2017_grown.csv"
+
+tc2017 <- "tc2018data_2017law.parquet"
+tc2018 <- "tc2018data_2018law.parquet"
+tc2018xSALT <- "tc2018data_2018lawxSALT.parquet"
+tc2018_SD2017 <- "tc2018data_2018law_SD2017.parquet"
+tc2018_SALTSD2017 <- "tc2018data_2018law_SALT_SD2017.parquet"
+
+
+```
+
+
+```{r constants}
+idvars <- c("stabbr", "stname", "agi_stub", "agi_label")
+
+# define some state sorts
+# "AR", "CA", "CT", "FL", "MA", "NJ", "NY", "PA", "TX", "other"
+usny_sort <- c("US", "NY", "AR", "CA", "CT", "FL", "MA", "NJ",  "PA", "TX", "other")
+nyus_sort <- c("NY", "US", "AR", "CA", "CT", "FL", "MA", "NJ",  "PA", "TX", "other")
+
+source_note <- "\nAuthors' analysis of a sample of tax returns constructed to be representative of states at 2018 income levels."
+
+```
+
+
+```{r functions_utilities}
+get_stname <- function(stabbr){
+  stname <- case_when(stabbr == "US" ~ "United States",
+                      stabbr == "other" ~ "Other states combined",
+                      stabbr %in% state.abb ~ state.name[match(stabbr, state.abb)],
+                      TRUE ~ "ERROR")
+  return(stname)
+}
+# get_stname(usny_sort)
+
+
+html_wrap <- function(s, len){
+  # gt uses <br> to break columns in html, rather than \n, so 
+  # wrap lines and then replace \n with <br> for column headings
+  wrapped <- str_wrap(s, 15)
+  return(str_replace_all(wrapped, "\\n", "<br>"))
+}
+
+
+```
+
+
+
+```{r functions_data}
+
+pol_change <- function(wide, policy1, policy2, vname="iitax"){
+  # generic function to take two policies and create a file with changes and percent changes
+  p1name <- policy1
+  p2name <- policy2
+  data <- wide %>%
+    filter(variable==all_of(vname)) %>%
+    rename(policy1=all_of(policy1), policy2=all_of(policy2)) %>%
+    mutate(p1name=p1name, p2name=p2name, 
+           diff=policy2 - policy1,
+           pdiff=ifelse(policy1 > 0, diff / policy1 * 100, NA_real_)) %>% 
+    select(variable, p1name, p2name, all_of(idvars), policy1, policy2, diff, pdiff)
+  return(data)
+}
+
+
+```
+
+
+```{r functions_tables}
+pol_change_table <- function(data, tab_title, tab_subtitle, p1name, p2name){
+  stub <- names(data)[1]
+  stub_label <- ifelse(stub=="stname", "", "Adjusted gross income")
+  dollar_scale <- ifelse(stub=="stname", 1e-9, 1e-6)
+  dollar_decimal <- ifelse(stub=="stname", 1, 0)
+  # dollar_scale_label <- ifelse(stub=="stname", "millions", "billions")
+  
+  p1label <- html_wrap(p1name, 15)
+  p2label <- html_wrap(p2name, 15)
+  
+  tab <- data %>%
+    rename(stub=all_of(stub)) %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      stub = stub_label,
+      policy1 = html(p1label),
+      policy2 = html(p2label),
+      diff = html("$ change"),
+      pdiff = html("% change")
+    ) %>%
+    fmt_currency(
+      columns = c("policy1", "policy2", "diff"),
+      rows=1,
+      decimals = dollar_decimal,
+      scale_by = dollar_scale,
+      suffixing = FALSE
+    ) %>%
+    fmt_number(
+      columns = c("policy1", "policy2", "diff"),
+      rows=2:nrow(data),
+      decimals = dollar_decimal,
+      scale_by = dollar_scale,
+      suffixing = FALSE
+    ) %>%
+    fmt_percent(
+      columns="pdiff",
+      scale_values = FALSE,
+      decimals = 1
+    ) %>% 
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+    tab_source_note(source_note)
+  return(tab)
+}
+
+
+pdiff_wide_table <- function(data, tab_title, tab_subtitle){
+  data %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      agi_label = "Adjusted gross income"
+    ) %>%
+    fmt_percent(
+      columns=2:ncol(data),
+      scale_values = FALSE,
+      decimals = 1
+    ) %>% 
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+    tab_source_note(source_note)
+}
+
+
+```
+
+
+```{r functions_state_byagi_table}
+get_state_policies <- function(st, policy1, policy2){
+  data <- pol_change(allsums_wide, policy1, policy2) %>%
+    filter(stabbr==st) %>%
+    select(all_of(idvars), policy1, policy2, diff, pdiff) %>%
+    arrange(agi_stub) %>%
+    select(agi_label, policy1, policy2, diff, pdiff)
+  return(data)
+}
+
+get_state_tab <- function(st, policy1, policy2, p1name, p2name, dollars){
+  data <- get_state_policies(st, policy1, policy2)
+  tab_title <- paste0(get_stname(st), ": Total federal income tax liability in 2018: ", p1name, ", and ", p2name)
+  tab_subtitle <- paste0("Amounts are in ", dollars, " of 2018 dollars")
+  tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
+  return(tab)
+}
+
+```
+
+
+# Get data
+```{r weights}
+weights <- read_csv(paste0(wtdir, wtfname))
+
+weights_long <- weights %>%
+  rename("US"="weight") %>%
+  select(-c(ht2_stub, geoweight_sum)) %>%
+  pivot_longer(-pid, names_to = "stabbr", values_to = "weight")
+
+sts <- unique(weights_long$stabbr)
+```
+
+
+```{r stubs, rows.print=13}
+
+ht2stubs <- read_parquet(paste0(tcout, tc2017), 
+                         col_select = all_of(c("ht2_stub", "ht2range"))) %>%
+  distinct() %>%
+  arrange(ht2_stub)
+
+# create collapsed stubs that combine 1, 2, and 3
+agi_bounds <- c(-Inf, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, 1e6, Inf)
+agistubs <- ht2stubs %>%
+  mutate(agi_stub = ifelse(ht2_stub <= 3, 1, ht2_stub - 2),
+         agi_label=ifelse(ht2_stub <= 3, "Under $25,000", ht2range)) %>%
+  select(agi_stub, agi_label) %>%
+  distinct() %>%
+  mutate(agi_ge=agi_bounds[1:(length(agi_bounds) - 1)],
+         agi_lt=agi_bounds[2:length(agi_bounds)]) %>%
+  add_row(agi_stub = 99,
+          agi_label = "  Totals")
+agistubs
+
+
+get_stub <- function(agi, agi_bounds){
+  cut(agi, agi_bounds, labels=FALSE, right=FALSE)
+}
+
+# get_stub(c(-1000, 0, 24999, 25e3, 1e9), agi_bounds) # check
+
+# define agi stub for every person in 2017 base year
+# # use 2017 ht2_stubs...
+pid_stubs <- read_parquet(paste0(tcout, tc2017), 
+                         col_select = all_of(c("pid", "c00100"))) %>%
+  mutate(agi_stub=get_stub(c00100, agi_bounds))
+
+```
+
+
+```{r get_tcoutput}
+# tc2018_SD2017
+
+keepvars <- c("pid", "c00100", "iitax", "taxbc")
+
+df2017 <- read_parquet(paste0(tcout, tc2017), col_select = all_of(keepvars)) %>%
+  mutate(policy="law2017")
+
+df2018 <- read_parquet(paste0(tcout, tc2018), col_select = all_of(keepvars)) %>%
+  mutate(policy="law2018")
+
+df2018xSALT <- read_parquet(paste0(tcout, tc2018xSALT), col_select = all_of(keepvars)) %>%
+  mutate(policy="law2018_xSALT")
+
+df2018_SD2017 <- read_parquet(paste0(tcout, tc2018_SD2017), col_select = all_of(keepvars)) %>%
+  mutate(policy="law2018_SD2017")
+
+df2018_SALTSD2017 <- read_parquet(paste0(tcout, tc2018_SALTSD2017), col_select = all_of(keepvars)) %>%
+  mutate(policy="law2018_SALTSD2017")
+
+df2017
+df2018
+df2018xSALT
+df2018_SD2017
+df2018_SALTSD2017
+
+
+```
+
+
+
+```{r long}
+long2017 <- weights_long %>%
+  left_join(df2017,
+            by = "pid")
+
+long2018 <- weights_long %>%
+  left_join(df2018,
+            by = "pid")
+
+long2018xSALT <- weights_long %>%
+  left_join(df2018xSALT,
+            by = "pid")
+
+long2018_SD2017 <- weights_long %>%
+  left_join(df2018_SD2017,
+            by = "pid")
+
+long2018_SALTSD2017 <- weights_long %>%
+  left_join(df2018_SALTSD2017,
+            by = "pid")
+
+
+stack <-  bind_rows(long2017, 
+                    long2018,
+                    long2018xSALT,
+                    long2018_SD2017,
+                    long2018_SALTSD2017) %>%
+  left_join(pid_stubs %>% select(pid, agi_stub), by="pid")
+
+stack
+
+```
+
+
+```{r collapse, rows.print=12}
+stack
+sums <- stack %>%
+  mutate(wtdn=1) %>%
+  mutate(across(.cols=-c(pid, stabbr, weight, agi_stub, policy),
+                ~ .x * weight)) %>%
+  group_by(policy, stabbr, agi_stub) %>%
+  summarise(across(.cols=-c(pid, weight),
+                   ~ sum(.x)), .groups="drop")
+
+# add grand totals, stub labels, and state names
+totsums <- sums %>%
+  group_by(policy, stabbr) %>%
+  summarise(across(.cols=-agi_stub, ~sum(.x)), .groups="drop") %>%
+  mutate(agi_stub=99)
+
+allsums <- bind_rows(sums, totsums) %>%
+  left_join(agistubs %>% select(-c(agi_ge, agi_lt)), by="agi_stub") %>%
+  left_join(stcodes %>% select(stabbr, stname), by="stabbr") %>%
+  mutate(stname=ifelse(stabbr=="other", "Other states", stname)) %>%
+  arrange(policy, stabbr, agi_stub) %>%
+  select(policy, stabbr, stname, agi_stub, agi_label, everything())
+
+saveRDS(allsums, here::here("data", "allsums.rds"))
+
+
+```
+
+
+```{r get_wide_data, rows.print=20}
+allsums <- readRDS(here::here("data", "allsums.rds"))
+
+allsums_wide <- allsums %>%
+  pivot_longer(cols=-c(policy, stabbr, stname, agi_stub, agi_label),
+               names_to = "variable") %>%
+  pivot_wider(names_from = policy)
+
+```
+
+
+# Begin analysis
+## Change from 2017 law to 2018 law
+
+```{r iit_summary_allstates, rows.print=20}
+
+policy1 <- "law2017"
+p1name <- "2017 law"
+
+policy2 <- "law2018"
+p2name <- "2018 law"
+
+tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 law"
+tab_subtitle <- "Amounts are in billions of 2018 dollars"
+
+data <- pol_change(allsums_wide, policy1, policy2) %>%
+  filter(agi_stub==99) %>%
+  select(all_of(idvars), policy1, policy2, diff, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr) %>%
+  select(stname, policy1, policy2, diff, pdiff)
+
+iit_tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
+gtsave(iit_tab, "iit_allstates_table.png", path = here::here("results"))
+
+iit_tab
+
+```
+
+```{r iit_one_state_byagi}
+
+policy1 <- "law2017"
+p1name <- "2017 law"
+
+policy2 <- "law2018"
+p2name <- "2018 law"
+
+dollars <- "millions"
+
+for(st in nyus_sort){
+  print(st)
+  tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
+  gtsave(tab, paste0("iit_byagi_table_", st, ".png"), path = here::here("results"))
+  # print(tab)
+}
+
+
+```
+
+
+
+```{r iit_wide, rows.print=20}
+
+policy1 <- "law2017"
+policy2 <- "law2018"
+
+tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 tax law"
+tab_subtitle <- "Percent change from 2017 law to 2018 law"
+
+data <- pol_change(allsums_wide, policy1, policy2) %>%
+  select(all_of(idvars), agi_stub, agi_label, stname, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr, agi_stub) %>%
+  select(agi_label, stname, pdiff) %>%
+  pivot_wider(names_from = stname, values_from = pdiff)
+
+
+iitwide_tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
+
+gtsave(iitwide_tab, "iitpdiff_byagi_allstates_table.png", path = here::here("results"))
+iitwide_tab
+
+```
+
+
+## Impact of the SALT cap
+
+```{r salt_summary_allstates, rows.print=20}
+
+policy1 <- "law2018"
+p1name <- "2018 law"
+
+policy2 <- "law2018_xSALT"
+p2name <- "2018 law with SALT uncapped"
+
+tab_title <- "Total federal income tax liability: 2018 law, and 2018 law with SALT uncapped"
+tab_subtitle <- "Amounts are in billions of 2018 dollars"
+
+data <- pol_change(allsums_wide, policy1, policy2) %>%
+  filter(agi_stub==99) %>%
+  select(all_of(idvars), policy1, policy2, diff, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr) %>%
+  select(stname, policy1, policy2, diff, pdiff)
+
+iitxsalt_tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
+gtsave(iitxsalt_tab, "iitxsalt_table.png", path = here::here("results"))
+
+iitxsalt_tab
+
+```
+
+
+```{r salt_one_state_byagi}
+
+policy1 <- "law2018"
+p1name <- "2018 law"
+
+policy2 <- "law2018_xSALT"
+p2name <- "2018 law with SALT uncapped"
+
+dollars <- "millions"
+
+for(st in nyus_sort){
+  print(st)
+  tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
+  gtsave(tab, paste0("iitxSALT_byagi_table_", st, ".png"), path = here::here("results"))
+  # print(tab)
+}
+
+
+```
+
+
+```{r iitxSALT_wide, rows.print=20}
+
+policy1 <- "law2018"
+policy2 <- "law2018_xSALT"
+
+tab_title <- "Total federal income tax liability: 2018 law, and 2018 law with SALT uncapped"
+tab_subtitle <- "Percent change from 2018 law to 2018 law with SALT uncapped"
+
+data <- pol_change(allsums_wide, policy1, policy2) %>%
+  select(all_of(idvars), agi_stub, agi_label, stname, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr, agi_stub) %>%
+  select(agi_label, stname, pdiff) %>%
+  pivot_wider(names_from = stname, values_from = pdiff)
+
+iitwide_xSALT_tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
+
+gtsave(iitwide_xSALT_tab, "iitxSALT_pdiff_byagi_allstates_table.png", path = here::here("results"))
+iitwide_xSALT_tab
+
+
+```
+
+
+## Impact of the standard deduction increase, relative to TCJA
+```{r SD_summary_allstates}
+
+policy1 <- "law2018"
+p1name <- "2018 law"
+
+policy2 <- "law2018_SD2017"
+p2name <- "2018 law without standard deduction increase"
+
+tab_title <- "Total federal income tax liability in 2018: 2018 law, and 2018 law without standard deduction increase"
+tab_subtitle <- "Amounts are in billions of 2018 dollars"
+
+data <- pol_change(allsums_wide, policy1, policy2) %>%
+  filter(agi_stub==99) %>%
+  select(all_of(idvars), policy1, policy2, diff, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr) %>%
+  select(stname, policy1, policy2, diff, pdiff)
+
+sd_tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
+gtsave(sd_tab, "sd_allstates_table.png", path = here::here("results"))
+
+sd_tab
+```
+
+
+```{r sd_one_state_byagi}
+
+policy1 <- "law2018"
+p1name <- "2018 law"
+
+policy2 <- "law2018_SD2017"
+p2name <- "2018 law without standard deduction increase"
+
+dollars <- "millions"
+
+for(st in nyus_sort){
+  print(st)
+  tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
+  gtsave(tab, paste0("sd_byagi_table_", st, ".png"), path = here::here("results"))
+  # print(tab)
+}
+
+
+```
+
+
+```{r sd_wide}
+
+policy1 <- "law2018"
+policy2 <- "law2018_SD2017"
+
+tab_title <- "Total federal income tax liability in 2018: 2018 tax law, and 2018 law without standard deduction increase"
+tab_subtitle <- "Percent change from 2018 law to 2018 law without standard deduction increase"
+
+data <- pol_change(allsums_wide, policy1, policy2) %>%
+  select(all_of(idvars), agi_stub, agi_label, stname, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr, agi_stub) %>%
+  select(agi_label, stname, pdiff) %>%
+  pivot_wider(names_from = stname, values_from = pdiff)
+
+wide_sd_tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
+
+gtsave(wide_sd_tab, "wide_sd_pdiff_byagi_allstates_table.png", path = here::here("results"))
+wide_sd_tab
+
+```
+
+## Impact of standard deduction combined
+
+```{r}
+policy1 <- "law2018"
+p1name <- "2018 law"
+
+policy2 <- "law2018_SALTSD2017"
+p2name <- "2018 law with 2017 SALT and standard deduction"
+
+```
+
+
+```{r sdsalt_summary_allstates, rows.print=20}
+
+
+tab_title <- "Total federal income tax liability in 2018: 2018 law with and without SALT and SD"
+tab_subtitle <- "Amounts are in billions of 2018 dollars"
+
+data <- pol_change(allsums_wide, policy1, policy2) %>%
+  filter(agi_stub==99) %>%
+  select(all_of(idvars), policy1, policy2, diff, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr) %>%
+  select(stname, policy1, policy2, diff, pdiff)
+
+tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
+gtsave(tab, "sdsalt_allstates_table.png", path = here::here("results"))
+
+tab
+
+```
+
+
+```{r sdsalt_one_state_byagi}
+
+dollars <- "millions"
+
+for(st in nyus_sort){
+  print(st)
+  tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
+  gtsave(tab, paste0("sdsalt_byagi_table_", st, ".png"), path = here::here("results"))
+  # print(tab)
+}
+
+
+```
+
+
+
+```{r sdsalt_wide, rows.print=20}
+
+tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 tax law"
+tab_subtitle <- "Percent change from 2017 law to 2018 law"
+
+data <- pol_change(allsums_wide, policy1, policy2) %>%
+  select(all_of(idvars), agi_stub, agi_label, stname, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr, agi_stub) %>%
+  select(agi_label, stname, pdiff) %>%
+  pivot_wider(names_from = stname, values_from = pdiff)
+
+
+iitwide_tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
+
+gtsave(iitwide_tab, "iitpdiff_byagi_allstates_table.png", path = here::here("results"))
+iitwide_tab
+
+```
+
+
