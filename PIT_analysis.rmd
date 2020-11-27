@@ -273,6 +273,7 @@ weights_long <- weights %>%
   pivot_longer(-pid, names_to = "stabbr", values_to = "weight")
 
 sts <- unique(weights_long$stabbr)
+
 ```
 
 
@@ -297,6 +298,7 @@ agistubs <- ht2stubs %>%
 agistubs
 
 
+
 get_stub <- function(agi, agi_bounds){
   cut(agi, agi_bounds, labels=FALSE, right=FALSE)
 }
@@ -312,7 +314,7 @@ pid_stubs <- read_parquet(paste0(tcout, tc2017),
 ```
 
 
-```{r get_tcoutput}
+```{r ONETIME_get_tcoutput}
 # tc2018_SD2017
 
 keepvars <- c("pid", "c00100", "iitax", "taxbc")
@@ -343,7 +345,7 @@ df2018_SALTSD2017
 
 
 
-```{r long}
+```{r ONETIME_long}
 long2017 <- weights_long %>%
   left_join(df2017,
             by = "pid")
@@ -377,7 +379,7 @@ stack
 ```
 
 
-```{r collapse, rows.print=12}
+```{r ONETIME_collapse, rows.print=12}
 stack
 sums <- stack %>%
   mutate(wtdn=1) %>%
