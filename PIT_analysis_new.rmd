@@ -135,6 +135,7 @@ tcout <- r"(C:\programs_python\puf_analysis\ignore\taxcalc_output\)"
 
 jctdir <- paste0(tcout, "stack_jct/")
 saltdir <- paste0(tcout, "stack_saltfirst/")
+solodir <- paste0(tcout, "unstacked/")
 
 wtdir <- r"(C:\programs_python\puf_analysis\ignore\puf_versions\)"
 
@@ -145,7 +146,8 @@ wtfname <- "allweights2018_geo2017_grown.csv"
 
 
 ```{r constants}
-idvars <- c("stabbr", "stname", "agi_stub", "agi_label")
+  
+idvars <- c("stack", "stabbr", "stname", "agi_stub", "agi_label")
 
 # define some state sorts
 # "AR", "CA", "CT", "FL", "MA", "NJ", "NY", "PA", "TX", "other"
@@ -308,37 +310,7 @@ get_state_tab <- function(st, policy1, policy2, p1name, p2name, dollars){
 
 # Get data
 
-```{r reforms, rows.print=25}
-# for now keep a minimal list of information about each reform
-
-get_file <- function(policy, policydir, keepvars){
-  fname <- paste0(policydir, policy, ".parquet")
-  stack <- case_when(str_detect(policydir, "stack_jct") ~ "jct",
-                     str_detect(policydir, "stack_saltfirst") ~ "saltfirst",
-                     TRUE ~ "ERROR")
-  df <- read_parquet(fname, 
-                     col_select = all_of(keepvars)) %>%
-    mutate(policy=policy,
-           stack=all_of(stack))
-  df
-}
-
-
-keepvars <- c("pid", "c00100", "iitax")
-
-# get the stack_jct policies
-label_map
-get_file(label_map$fullname_jct[1], jctdir, keepvars)
-get_file(label_map$fullname_salt[1], saltdir, keepvars)
-
-policy_jct <- map_dfr(label_map$fullname_jct, get_file, jctdir, keepvars)
-policy_saltfirst <- map_dfr(label_map$fullname_salt, get_file, saltdir, keepvars)
-policydf <- bind_rows(policy_jct, policy_saltfirst)
-count(policydf, stack, policy)
-
-```
-
-
+## stubs
 ```{r stubs, rows.print=13}
 # , "filer", "ht2_stub", "ht2range"
 
@@ -381,7 +353,7 @@ pid_stubs <- basedf %>%
 
 ```
 
-
+## weights
 ```{r weights}
 weights <- read_csv(paste0(wtdir, wtfname))
 
@@ -395,6 +367,85 @@ sts <- unique(weights_long$stabbr)
 setdiff_all(sts, nyus_sort)  # should be no difference
 
 ```
+
+
+## stacked data
+```{r reforms, rows.print=25}
+# for now keep a minimal list of information about each reform
+
+get_file <- function(policy, policydir, keepvars){
+  fname <- paste0(policydir, policy, ".parquet")
+  stack <- case_when(str_detect(policydir, "stack_jct") ~ "jct",
+                     str_detect(policydir, "stack_saltfirst") ~ "saltfirst",
+                     TRUE ~ "ERROR")
+  df <- read_parquet(fname, 
+                     col_select = all_of(keepvars)) %>%
+    mutate(policy=policy,
+           stack=all_of(stack))
+  df
+}
+
+
+keepvars <- c("pid", "c00100", "iitax")
+
+# get the stack_jct policies
+label_map
+get_file(label_map$fullname_jct[1], jctdir, keepvars)
+get_file(label_map$fullname_salt[1], saltdir, keepvars)
+
+policy_jct <- map_dfr(label_map$fullname_jct, get_file, jctdir, keepvars)
+policy_saltfirst <- map_dfr(label_map$fullname_salt, get_file, saltdir, keepvars)
+policydf <- bind_rows(policy_jct, policy_saltfirst)
+count(policydf, stack, policy)
+
+```
+
+## unstacked data and produce a quick table of differences
+```{r}
+pnames <- list.files(solodir) %>% str_remove(".parquet")
+
+get_solo <- function(policy, policydir, keepvars){
+  fname <- paste0(policydir, policy, ".parquet")
+  df <- read_parquet(fname, 
+                     col_select = all_of(keepvars)) %>%
+    mutate(policy=policy)
+  df
+}
+
+# get_solo(pnames[1], solodir, c("pid", "s006", "c00100", "iitax"))
+dfsolo <- map_dfr(pnames, get_solo, solodir, c("pid", "s006", "c00100", "iitax"))
+
+# quick table of national differences
+solosums <- dfsolo %>%
+  group_by(policy) %>%
+  summarise(iitax=sum(iitax * s006, na.rm=TRUE), .groups="drop")
+
+solosums %>%
+  filter(policy != "law2018_vs_law2017") %>%
+  mutate(iitax=iitax / 1e9) %>%
+  mutate(diff=iitax - iitax[policy=="law2017_vs_law2017"],
+         pdiff = diff / iitax[policy=="law2017_vs_law2017"] * 100) %>%
+  arrange(diff) %>%
+  kable(digits=2, format.args=list(big.mark=","))
+
+synergy <- solosums %>%
+  filter(policy != "law2018_vs_law2017") %>%
+  mutate(iitax=iitax / 1e9) %>%
+  mutate(diff=iitax - iitax[policy=="law2017_vs_law2017"],
+         pdiff = diff / iitax[policy=="law2017_vs_law2017"] * 100) %>%
+  summarise(law2017=iitax[policy=="law2017_vs_law2017"],
+            law2018xqlimit=iitax[policy=="law2018xQlimit_vs_law2017"],
+            sumdiffs=sum(diff[!policy %in% c("law2017_vs_law2017", "law2018xQlimit_vs_law2017")])) %>%
+  mutate(netdiff=law2018xqlimit - law2017,
+         synergy=netdiff - sumdiffs)
+synergy
+
+```
+
+
+
+
+
 
 ```{r ONETIME_collapse}
 # collapse by stack, policy, state, agi range
@@ -423,6 +474,7 @@ agisums <- collapse %>%
 
 collapse_all <- bind_rows(collapse, agisums) %>%
   left_join(agistubs %>% select(agi_stub, agi_label), by="agi_stub") %>%
+  mutate(stname=get_stname(stabbr)) %>%
   arrange(stack, policy, stabbr, agi_stub)
 
 # check filer and nonfiler sums
@@ -442,7 +494,7 @@ iitax_filers <- collapse_all %>%
   filter(filer) %>%
   select(-filer, -c00100) %>%
   arrange(stack, stabbr, agi_stub, policy) %>%
-  group_by(stack, stabbr, agi_stub) %>%
+  group_by(stack, stabbr, stname, agi_stub) %>%
   mutate(change=iitax - lag(iitax))
 
 
@@ -467,8 +519,6 @@ get_changedf <- function(stack_keep){
                         TRUE ~ "ERROR") %>% sort()
   
   policies_use <- setdiff(policies, policies[1])
-  
-  idvars <- c("stack", "stabbr", "agi_stub", "agi_label")
     
   changes <- iitax_filers %>% 
     filter(stack==stack_keep, policy %in% policies_use) %>%
@@ -489,7 +539,9 @@ get_changedf <- function(stack_keep){
   
   changedf <- left_join(changes, ends, by=idvars) %>%
     select(all_of(idvars), policies[1], all_of(change_order), policies[length(policies)]) %>%
-    mutate(totchange=!!as.name(end) - !!as.name(start)) #  - all_of(policies[1]))
+    mutate(diff=!!as.name(end) - !!as.name(start),
+           pdiff=ifelse(!!as.name(start) > 0, diff / !!as.name(start) * 100, NA_real_)) %>%
+    ungroup()
   return(changedf)
 }
 
@@ -503,82 +555,6 @@ get_changedf("saltfirst")
 
 ```
 
-
-
-```{r ONETIME_long}
-long2017 <- weights_long %>%
-  left_join(df2017,
-            by = "pid")
-
-long2018 <- weights_long %>%
-  left_join(df2018,
-            by = "pid")
-
-long2018xSALT <- weights_long %>%
-  left_join(df2018xSALT,
-            by = "pid")
-
-long2018_SD2017 <- weights_long %>%
-  left_join(df2018_SD2017,
-            by = "pid")
-
-long2018_SALTSD2017 <- weights_long %>%
-  left_join(df2018_SALTSD2017,
-            by = "pid")
-
-
-stack <-  bind_rows(long2017, 
-                    long2018,
-                    long2018xSALT,
-                    long2018_SD2017,
-                    long2018_SALTSD2017) %>%
-  left_join(pid_stubs %>% select(pid, agi_stub), by="pid")
-
-stack
-
-```
-
-
-```{r ONETIME_collapse2, rows.print=12}
-stack
-sums <- stack %>%
-  mutate(wtdn=1) %>%
-  mutate(across(.cols=-c(pid, stabbr, weight, agi_stub, policy),
-                ~ .x * weight)) %>%
-  group_by(policy, stabbr, agi_stub) %>%
-  summarise(across(.cols=-c(pid, weight),
-                   ~ sum(.x)), .groups="drop")
-
-# add grand totals, stub labels, and state names
-totsums <- sums %>%
-  group_by(policy, stabbr) %>%
-  summarise(across(.cols=-agi_stub, ~sum(.x)), .groups="drop") %>%
-  mutate(agi_stub=99)
-
-allsums <- bind_rows(sums, totsums) %>%
-  left_join(agistubs %>% select(-c(agi_ge, agi_lt)), by="agi_stub") %>%
-  left_join(stcodes %>% select(stabbr, stname), by="stabbr") %>%
-  mutate(stname=ifelse(stabbr=="other", "Other states", stname)) %>%
-  arrange(policy, stabbr, agi_stub) %>%
-  select(policy, stabbr, stname, agi_stub, agi_label, everything())
-
-saveRDS(allsums, here::here("data", "allsums.rds"))
-
-
-```
-
-
-```{r get_wide_data, rows.print=20}
-allsums <- readRDS(here::here("data", "allsums.rds"))
-
-allsums_wide <- allsums %>%
-  pivot_longer(cols=-c(policy, stabbr, stname, agi_stub, agi_label),
-               names_to = "variable") %>%
-  pivot_wider(names_from = policy)
-
-```
-
-
 # Begin analysis
 ## Change from 2017 law to 2018 law
 
@@ -588,10 +564,28 @@ p1name <- "2017 law"
 
 policy2 <- "law2018"
 p2name <- "2018 law"
+
+# prep 
+
+mapdf <- label_map %>%
+  arrange(jct) %>%
+  select(jct, policyvar, colname, fullname=fullname_jct)
+vars <- mapdf$fullname[c(1, nrow(mapdf))]
+
 ```
 
 
 ```{r 2018vs2017_summary, rows.print=20}
+
+
+
+data <- get_changedf("jct") %>%
+  filter(agi_stub==99) %>%
+  select(idvars, policy1=vars[1], policy2=vars[2], diff, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr) %>%
+  select(stname, policy1, policy2, diff, pdiff)
+
 tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 law"
 tab_subtitle <- "Amounts are in billions of 2018 dollars"
 
@@ -644,6 +638,13 @@ gtsave(tab, "2018vs2017_pdiff_byagi_wide_table.png", path = here::here("results"
 tab
 
 ```
+
+## Individual reforms measured in isolation
+
+```{r}
+
+```
+
 
 
 ## Impact of uncapped SALT vs. 2018 law
