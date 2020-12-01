@@ -86,7 +86,7 @@ devtools::session_info()
 ```{r define_runtype}
 # pick one of the following
 # runtype <- "stack_saltfirst"
-runtype <- "stack_jct"
+# runtype <- "stack_jct"
 
 ```
 
@@ -168,6 +168,15 @@ get_stname <- function(stabbr){
   return(stname)
 }
 # get_stname(usny_sort)
+
+get_stabbr <- function(stname){
+  stabbr <- case_when(stname == "United States" ~ "US",
+                      stname == "Other states combined" ~ "other",
+                      stname %in% state.name ~ state.abb[match(stname, state.name)],
+                      TRUE ~ "ERROR")
+  return(stabbr)
+}
+# get_stabbr(get_stname(usny_sort))
 
 
 html_wrap <- function(s, len){
@@ -283,15 +292,47 @@ pdiff_wide_table <- function(data, tab_title, tab_subtitle){
     tab_source_note(source_note)
 }
 
+diff_wide_table <- function(data, tab_title, tab_subtitle){
+  data %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      agi_label = "Adjusted gross income"
+    ) %>%
+    fmt_currency(
+      columns = 2:ncol(data),
+      rows=1,
+      decimals = 0,
+      suffixing = FALSE
+    ) %>%
+    fmt_number(
+      columns = 2:ncol(data),
+      rows=2:nrow(data),
+      decimals = 0,
+      suffixing = FALSE
+    ) %>%    
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+    tab_source_note(source_note)
+}
+
 
 ```
 
 
 ```{r functions_state_byagi_table}
 get_state_policies <- function(st, policy1, policy2){
-  data <- pol_change(allsums_wide, policy1, policy2) %>%
+  data <- df_changes_jct %>%
     filter(stabbr==st) %>%
-    select(all_of(idvars), policy1, policy2, diff, pdiff) %>%
+    select(all_of(idvars), policy1=all_of(policy1), policy2=all_of(policy2), diff, pdiff) %>%
     arrange(agi_stub) %>%
     select(agi_label, policy1, policy2, diff, pdiff)
   return(data)
@@ -317,7 +358,7 @@ get_state_tab <- function(st, policy1, policy2, p1name, p2name, dollars){
 # create collapsed stubs we will use for reporting purposes, combining lowest income ranges
 
 # get needed variables from the first file, which we will then collapse
-basedf <- read_parquet(paste0(jctdir, stack_jct[1], ".parquet"),
+basedf <- read_parquet(paste0(jctdir, "0_law2017.parquet"),
                        col_select = all_of(c("pid", "filer", "c00100", "ht2_stub", "ht2range")))
 
 ht2stubs <- basedf %>%
@@ -371,6 +412,7 @@ setdiff_all(sts, nyus_sort)  # should be no difference
 
 ## stacked data
 ```{r reforms, rows.print=25}
+# get ALL of the stacked reforms -- jct stacking and salt-first stacking
 # for now keep a minimal list of information about each reform
 
 get_file <- function(policy, policydir, keepvars){
@@ -389,9 +431,9 @@ get_file <- function(policy, policydir, keepvars){
 keepvars <- c("pid", "c00100", "iitax")
 
 # get the stack_jct policies
-label_map
-get_file(label_map$fullname_jct[1], jctdir, keepvars)
-get_file(label_map$fullname_salt[1], saltdir, keepvars)
+# label_map
+# get_file(label_map$fullname_jct[1], jctdir, keepvars)
+# get_file(label_map$fullname_salt[1], saltdir, keepvars)
 
 policy_jct <- map_dfr(label_map$fullname_jct, get_file, jctdir, keepvars)
 policy_saltfirst <- map_dfr(label_map$fullname_salt, get_file, saltdir, keepvars)
@@ -440,22 +482,77 @@ synergy <- solosums %>%
          synergy=netdiff - sumdiffs)
 synergy
 
+
+```
+
+
+## collapse unstacked data
+```{r}
+# make solo_wide table dfsolo
+
+collapse_unstack <- weights_long %>%
+  left_join(dfsolo %>% select(pid, c00100, iitax, policy),
+            by="pid") %>%
+  left_join(pid_stubs %>% select(-c00100), by = "pid") %>%
+  group_by(policy, stabbr, agi_stub, filer) %>%
+  summarise(c00100=sum(weight * c00100, na.rm=TRUE),
+            iitax=sum(weight * iitax, na.rm=TRUE),
+            .groups="drop")
+
+agisums_unstack <- collapse_unstack %>%
+  group_by(policy, stabbr, filer) %>%  
+  summarise(c00100=sum(c00100, na.rm=TRUE),
+            iitax=sum(iitax, na.rm=TRUE),
+            .groups="drop") %>%
+  mutate(agi_stub=99)
+
+collapse_all_unstack <- bind_rows(collapse_unstack, agisums_unstack) %>%
+  left_join(agistubs %>% select(agi_stub, agi_label), by="agi_stub") %>%
+  mutate(stname=get_stname(stabbr)) %>%
+  arrange(policy, stabbr, agi_stub)
+
+# check filer and nonfiler sums
+# collapse_all %>%
+#   filter(stack=="jct", stabbr=="US", agi_stub==99) %>%
+#   select(policy, filer, c00100, iitax) %>%
+#   pivot_longer(cols=c(c00100, iitax)) %>%
+#   mutate(filer=ifelse(filer, "filer", "nonfiler")) %>%
+#   pivot_wider(names_from = "filer") %>%
+#   mutate(nonfile_pct=nonfiler / (nonfiler + filer) * 100) %>%
+#   arrange(name, -nonfile_pct) %>%
+#   kable(digits=2, format.args=list(big.mark=","), caption="Non filers percent")
+  
+
+# this is our main analysis file
+iitax_filers_unstack <- collapse_all_unstack %>%
+  filter(filer) %>%
+  select(-filer, -c00100) %>%
+  arrange(stabbr, agi_stub, policy)
+
+solo_wide <- collapse_all_unstack %>%
+  filter(filer) %>%
+  select(-filer, -c00100) %>%
+  pivot_wider(names_from = policy, values_from = iitax)
+
+
 ```
 
 
 
-
-
-
+## collapse stacked data and keep weights, too
 ```{r ONETIME_collapse}
 # collapse by stack, policy, state, agi range
+# this will be the main file that forms the basis of almost all analysis
+
 collapse <- weights_long %>%
   left_join(policydf, by = "pid") %>%
   left_join(pid_stubs %>% select(-c00100), by = "pid") %>%
   group_by(stack, policy, stabbr, agi_stub, filer) %>%
   summarise(c00100=sum(weight * c00100, na.rm=TRUE),
             iitax=sum(weight * iitax, na.rm=TRUE),
+            weight=sum(weight, na.rm=TRUE),
             .groups="drop")
+summary(collapse)
 
 saveRDS(collapse, here::here("data", "collapse.rds"))
 
@@ -469,6 +566,7 @@ agisums <- collapse %>%
   group_by(stack, policy, stabbr, filer) %>%  
   summarise(c00100=sum(c00100, na.rm=TRUE),
             iitax=sum(iitax, na.rm=TRUE),
+            weight=sum(weight, na.rm=TRUE),
             .groups="drop") %>%
   mutate(agi_stub=99)
 
@@ -478,15 +576,15 @@ collapse_all <- bind_rows(collapse, agisums) %>%
   arrange(stack, policy, stabbr, agi_stub)
 
 # check filer and nonfiler sums
-collapse_all %>%
-  filter(stack=="jct", stabbr=="US", agi_stub==99) %>%
-  select(policy, filer, c00100, iitax) %>%
-  pivot_longer(cols=c(c00100, iitax)) %>%
-  mutate(filer=ifelse(filer, "filer", "nonfiler")) %>%
-  pivot_wider(names_from = "filer") %>%
-  mutate(nonfile_pct=nonfiler / (nonfiler + filer) * 100) %>%
-  arrange(name, -nonfile_pct) %>%
-  kable(digits=2, format.args=list(big.mark=","), caption="Non filers percent")
+# collapse_all %>%
+#   filter(stack=="jct", stabbr=="US", agi_stub==99) %>%
+#   select(policy, filer, c00100, iitax) %>%
+#   pivot_longer(cols=c(c00100, iitax)) %>%
+#   mutate(filer=ifelse(filer, "filer", "nonfiler")) %>%
+#   pivot_wider(names_from = "filer") %>%
+#   mutate(nonfile_pct=nonfiler / (nonfiler + filer) * 100) %>%
+#   arrange(name, -nonfile_pct) %>%
+#   kable(digits=2, format.args=list(big.mark=","), caption="Non filers percent")
   
 
 # this is our main analysis file
@@ -552,6 +650,10 @@ get_wide("saltfirst")
 get_changedf("jct")
 get_changedf("saltfirst")
 
+# create separate data frames of changes because they will not have the same columns
+df_changes_jct <- get_changedf("jct")
+df_changes_saltfirst <- get_changedf("saltfirst")
+
 
 ```
 
@@ -559,29 +661,27 @@ get_changedf("saltfirst")
 ## Change from 2017 law to 2018 law
 
 ```{r}
-policy1 <- "law2017"
-p1name <- "2017 law"
-
-policy2 <- "law2018"
-p2name <- "2018 law"
-
-# prep 
-
+# prep
 mapdf <- label_map %>%
   arrange(jct) %>%
   select(jct, policyvar, colname, fullname=fullname_jct)
 vars <- mapdf$fullname[c(1, nrow(mapdf))]
+
+policy1 <- vars[1]
+p1name <- "2017 law"
+
+policy2 <- vars[2]
+p2name <- "2018 law"
+
 
 ```
 
 
 ```{r 2018vs2017_summary, rows.print=20}
 
-
-
-data <- get_changedf("jct") %>%
+data <- df_changes_jct %>%
   filter(agi_stub==99) %>%
-  select(idvars, policy1=vars[1], policy2=vars[2], diff, pdiff) %>%
+  select(idvars, policy1=all_of(policy1), policy2=all_of(policy2), diff, pdiff) %>%
   mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
   arrange(stabbr) %>%
   select(stname, policy1, policy2, diff, pdiff)
@@ -589,12 +689,6 @@ data <- get_changedf("jct") %>%
 tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 law"
 tab_subtitle <- "Amounts are in billions of 2018 dollars"
 
-data <- pol_change(allsums_wide, policy1, policy2) %>%
-  filter(agi_stub==99) %>%
-  select(all_of(idvars), policy1, policy2, diff, pdiff) %>%
-  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
-  arrange(stabbr) %>%
-  select(stname, policy1, policy2, diff, pdiff)
 
 tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
 gtsave(tab, "2018vs2017_summary_table.png", path = here::here("results"))
@@ -602,6 +696,50 @@ gtsave(tab, "2018vs2017_summary_table.png", path = here::here("results"))
 tab
 
 ```
+
+
+```{r taxcut_plot}
+# data %>%
+#   mutate(stabbr=get_stabbr(stname),
+#          baseshare=policy1 / policy1[stname=="United States"] * 100,
+#          cutshare=diff / diff[stname=="United States"] * 100) %>%
+#   filter(!stabbr %in% c("US", "other")) %>%
+#   ggplot(aes(baseshare, cutshare, label=stname))  +
+#   geom_point() + 
+#   geom_text()
+
+
+# data %>%
+#   mutate(stabbr=get_stabbr(stname),
+#          baseshare=policy1 / policy1[stname=="United States"] * 100,
+#          cutshare=diff / diff[stname=="United States"] * 100) %>%
+#   filter(!stabbr %in% c("US", "other")) %>%
+#   pivot_longer(cols=c(baseshare, cutshare)) %>%
+#   ggplot(aes(x=stname, y=value, fill=name)) +
+#     geom_bar(stat="identity", position=position_dodge())
+
+p <- data %>%
+  mutate(stabbr=get_stabbr(stname), pdiff=-pdiff,
+         stname=ifelse(stabbr=="other", "States not\nshown, in\n aggregate", stname),
+         stname=ifelse(stabbr=="US", "United\nStates", stname),
+         grp=case_when(stabbr=="US" ~ 1,
+                       stabbr=="NY" ~2,
+                       TRUE ~ 3),
+         grp=as.factor(grp)) %>%
+  ggplot(aes(x=reorder(stname, -pdiff), y=pdiff, fill=grp)) +
+    geom_bar(stat="identity") +
+    scale_fill_manual(values=c("blue", "darkgreen", "lightgrey")) +
+    scale_x_discrete(name=NULL) +
+    scale_y_continuous(name="Tax cut (%)", breaks=seq(0, 20, 2.5)) +
+    geom_hline(yintercept = -data$pdiff[data$stname=="United States"], size=0.1, colour="#525252") +
+    theme_bw() +
+    theme(legend.position = "none") +
+    ggtitle("Tax cut in 2018 as percent of tax liability under 2017 law")
+p
+ggsave(filename=here::here("results", "taxcut_barchart.png"), plot=p, width=9, height=6, scale=1)
+
+```
+
 
 
 ```{r 2018vs2017_one_state_byagi}
@@ -624,8 +762,30 @@ for(st in nyus_sort){
 tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 tax law"
 tab_subtitle <- "Percent change from 2017 law to 2018 law"
 
-data <- pol_change(allsums_wide, policy1, policy2) %>%
-  select(all_of(idvars), agi_stub, agi_label, stname, pdiff) %>%
+pol_change <- function(wide, policy1, policy2){
+  # generic function to take two policies and create a file with changes and percent changes
+  p1name <- policy1
+  p2name <- policy2
+  data <- wide %>%
+    filter(variable==all_of(vname)) %>%
+    rename(policy1=all_of(policy1), policy2=all_of(policy2)) %>%
+    mutate(p1name=p1name, p2name=p2name, 
+           diff=policy2 - policy1,
+           pdiff=ifelse(policy1 > 0, diff / policy1 * 100, NA_real_)) %>% 
+    select(variable, p1name, p2name, all_of(idvars), policy1, policy2, diff, pdiff)
+  return(data)
+}
+solo_wide
+
+policy1 <- "law2017_vs_law2017"
+p1name <- "2017 law"
+policy2 <- "law2018xQlimit_vs_law2017"
+p2name <- "2018 law"
+data <- solo_wide %>%
+  select(stabbr, stname, agi_stub, agi_label, policy1=all_of(policy1), policy2=all_of(policy2)) %>%
+  mutate(p1name=p1name, p2name=p2name, 
+           diff=policy2 - policy1,
+           pdiff=ifelse(policy1 > 0, diff / policy1 * 100, NA_real_)) %>% 
   mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
   arrange(stabbr, agi_stub) %>%
   select(agi_label, stname, pdiff) %>%
@@ -639,9 +799,294 @@ tab
 
 ```
 
+
+```{r pdiff_agirange_scatter}
+
+pdata <- data %>%
+  left_join(agistubs %>% select(agi_stub, agi_label), by="agi_label") %>%
+  pivot_longer(-c(agi_stub, agi_label)) %>%
+  filter(!agi_stub %in% c(1, 2, 99)) %>%
+  mutate(stabbr=get_stabbr(name),
+         agi_label=str_wrap(agi_label, 12),
+         value=-value,
+         grp=case_when(stabbr=="US" ~ 1,
+                       stabbr=="NY" ~ 2,
+                       TRUE ~ 3),
+         grp=as.factor(grp)) %>%
+  arrange(agi_stub, -value)
+
+nudgex <- function(){
+  df <- pdata %>%
+    mutate(nudgex=case_when(agi_stub==3 & stabbr=="other" ~ -.1,
+                            agi_stub==3 & stabbr=="CT" ~ -.075,
+                            agi_stub==4 & stabbr %in% c("TX", "FL") ~ -0.075,
+                            agi_stub==5 & stabbr=="other" ~ -.1,
+                            agi_stub==5 & stabbr=="CT" ~ -.075,
+                            agi_stub==6 & stabbr=="TX" ~ -.075,
+                            agi_stub==6 & stabbr=="PA" ~ -.075,
+                            agi_stub==6 & stabbr=="CA" ~ -.075,
+                            agi_stub==6 & stabbr=="NJ" ~ -.075,
+                            agi_stub==7 & stabbr=="FL" ~ -.075,
+                            agi_stub==7 & stabbr=="PA" ~ -.075,
+                            TRUE ~ .075))
+  return(df$nudgex)
+}
+
+nudgey <- function(){
+  df <- pdata %>%
+    mutate(nudgey=case_when(agi_stub==3 & stabbr %in% c("US") ~ -0.25,
+                            agi_stub==4 & stabbr %in% c("FL") ~ -0.25,
+                            TRUE ~ 0.0))
+  return(df$nudgey)
+}
+# nudgey()
+
+p <- pdata %>%
+  ggplot(aes(x=reorder(agi_label, agi_stub), y=value, label=stabbr, colour=grp)) +
+    geom_point(size=0.5) +
+    # geom_text(size=2, nudge_x=0.15, check_overlap = TRUE) +
+    geom_text(fontface="bold", nudge_x=nudgex(), nudge_y=nudgey(), size=1.75, check_overlap = TRUE) +
+    # geom_text_repel(size=2, nudge_x=0.15) +
+    geom_hline(yintercept = 0, colour="red", size=0.1) +
+    scale_colour_manual(values=c("blue", "darkgreen", "#525252")) +
+    scale_x_discrete(name=NULL) +
+    scale_y_continuous(name="Tax cut (%)") +
+    ggtitle("Tax cut in 2018 as percent of liability under 2017 law",
+            subtitle="By adjusted gross income range") +
+    theme_bw() +
+    theme(legend.position = "none") +
+    labs(caption = "\nLowest income group had very large percentage reductions and is excluded to improve readability.") +
+    theme(plot.caption = element_text(hjust = 0, size = 8, colour="#525252"))
+ggsave(filename=here::here("results", "taxcut_agirange_scatter.png"), plot=p, width=9, height=6, scale=1)
+# position=position_jitter(width=1,height=1)
+p
+
+```
+
+## Change in average tax by agi range
+```{r rows.print=20}
+collapse_all 
+count(collapse_all, stack, policy)
+
+# , agi_stub==99, stabbr=="US"
+avgtax <- collapse_all %>%
+  filter(filer, stack=="jct", policy %in% c("0_law2017", "7_law2018")) %>%
+  mutate(avgtax=iitax / weight,
+         policy=case_when(policy=="0_law2017" ~ "policy1",
+                          policy=="7_law2018" ~ "policy2",
+                          TRUE ~ "ERROR")) %>%
+  select(policy, stabbr, stname, agi_stub, agi_label, avgtax) %>%
+  pivot_wider(names_from = policy, values_from = avgtax) %>%
+  mutate(diff=policy2 - policy1,
+         pdiff=ifelse(policy1 > 0, diff / policy1 * 100, NA_real_))
+avgtax
+
+
+```
+
+
+```{r avgtax_change}
+
+data <- avgtax %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr, agi_stub) %>%
+  select(agi_label, stname, diff) %>%
+  pivot_wider(names_from = stname, values_from = diff)
+
+tab_title <- "Average federal income tax liability, per return, in 2018: 2017 law, and 2018 tax law"
+tab_subtitle <- "Change in average tax, in dollars, from 2017 law to 2018 law"
+tab <- diff_wide_table(data, tab_title, tab_subtitle)
+gtsave(tab, "2018vs2017_dollardiff_byagi_wide_table.png", path = here::here("results"))
+```
+
+
+```{r avgtax_2017}
+data <- avgtax %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr, agi_stub) %>%
+  select(agi_label, stname, policy1) %>%
+  pivot_wider(names_from = stname, values_from = policy1)
+
+tab_title <- "Average federal income tax liability, per return, in 2018 under 2017 law"
+tab <- diff_wide_table(data, tab_title, tab_subtitle=NULL)
+gtsave(tab, "2017_dollarliab_byagi_wide_table.png", path = here::here("results"))
+```
+
+
+```{r avgtax_2018}
+data <- avgtax %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr, agi_stub) %>%
+  select(agi_label, stname, policy2) %>%
+  pivot_wider(names_from = stname, values_from = policy2)
+
+tab_title <- "Average federal income tax liability, per return, in 2018 under 2018 law"
+tab <- diff_wide_table(data, tab_title, tab_subtitle=NULL)
+gtsave(tab, "2018_dollarliab_byagi_wide_table.png", path = here::here("results"))
+```
+
+
+
 ## Individual reforms measured in isolation
 
+```{r rows.print=20}
+solo_wide
+ns(solo_wide)
+label_map
+
+# define the order of columns to match the JCT order
+cols_order <- read_csv("policyvar, solovar
+law2017, law2017_vs_law2017
+allrates2018, allrates2018_vs_law2017
+sd2018, sd2018_vs_law2017
+persx2018, persx2018_vs_law2017
+qbid2018_limitfalse, qbid2018_limitfalse_vs_law2017
+salt2018, salt2018_vs_law2017
+amt2018, amt2018_vs_law2017
+other, other_2018vs2017_vs_law2017
+law2018, law2018xQlimit_vs_law2017
+")
+cols_order <- cols_order %>%
+   mutate(order=row_number()) %>%
+  left_join(label_map %>% select(policyvar, colname),
+            by="policyvar") %>%
+  mutate(colname=ifelse(policyvar=="other", "Other provisions", colname)) %>%
+  arrange(order)
+
+diff_names <- cols_order %>%
+  filter(!policyvar %in% c("law2017", "law2018")) %>%
+  .$solovar
+
+data <- solo_wide %>%
+  filter(agi_stub==99) %>%
+  select(stabbr, stname, agi_stub, agi_label, all_of(cols_order$solovar)) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr, agi_stub) %>%
+  mutate(across(.cols=all_of(diff_names),
+                .fns= ~.x - law2017_vs_law2017))
+
+tab_title <- "Changes from 2017 law for major provisions of the TCJA, measured in isolation"
+tab_subtitle <- "Millions of dollars"
+
+# create a list of labels for columns
+tmp <- cols_order %>%
+  filter(solovar %in% diff_names)
+lablist <- split(tmp$colname, tmp$solovar)
+
+# lablist["sd2018_vs_law2017"]
+
+tab <- data %>%
+  select(stname, all_of(diff_names)) %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      stname=""
+    ) %>%
+  cols_label(.list=lablist) %>%
+    fmt_currency(
+      columns = diff_names,
+      rows=1,
+      decimals = 0,
+      scale_by = 1e-6,
+      suffixing = FALSE
+    ) %>%
+    fmt_number(
+      columns = diff_names,
+      rows=2:nrow(data),
+      decimals = 0,
+      scale_by = 1e-6,
+      suffixing = FALSE
+    ) %>%
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+    tab_source_note(source_note)
+  
+gtsave(tab, "2018vs2017_provisions_bystate_isolation.png", path = here::here("results"))
+tab
+
+cols_order$colname
+
+```
+
+
+
+## Individual reforms estimated in the JCT order
 ```{r}
+glimpse(df_changes_jct)
+
+
+tab_title <- "Changes from 2017 law for major provisions of the TCJA, measured in sequence"
+tab_subtitle <- "Millions of dollars"
+
+# create a list of labels for columns
+tmp <- label_map %>%
+  filter(fullname_jct %in% names(df_changes_jct)) %>%
+  add_row(fullname_jct="other", colname="All other provisions combined")
+lablist <- split(tmp$colname, tmp$fullname_jct)
+
+data <- df_changes_jct %>%
+  filter(agi_stub==99) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr) %>%
+  select(stname, all_of(label_map$fullname_jct), other, diff, pdiff) %>%
+  relocate(other, .before = `7_law2018`)
+  
+
+tab <- data %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      stname="",
+      diff="Total change",
+      pdiff="% change"
+    ) %>%
+  cols_label(.list=lablist) %>%
+    fmt_currency(
+      columns = c(tmp$fullname_jct, "diff"),
+      rows=1,
+      decimals = 0,
+      scale_by = 1e-6,
+      suffixing = FALSE
+    ) %>%
+    fmt_number(
+      columns = c(tmp$fullname_jct, "diff"),
+      rows=2:nrow(data),
+      decimals = 0,
+      scale_by = 1e-6,
+      suffixing = FALSE
+    ) %>%
+    fmt_percent(
+      columns="pdiff",
+      scale_values = FALSE,
+      decimals = 1
+    ) %>% 
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+  tab_spanner(
+      label = "Tax change relative to 2018 law, estimated in left-to-right order, attributable to:",
+      columns = c(setdiff(label_map$fullname_jct, c("0_law2017", "7_law2018")), "other")
+    ) %>%
+    tab_source_note(source_note)
+  
+gtsave(tab, "2018vs2017_provisions_bystate_jctstack.png", path = here::here("results"), vwidth=2000, vheight=2000)
+tab
+# vwidth = 992,   vheight = 744,
 
 ```
 
