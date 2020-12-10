@@ -137,6 +137,8 @@ jctdir <- paste0(tcout, "stack_jct/")
 saltdir <- paste0(tcout, "stack_saltfirst/")
 solodir <- paste0(tcout, "unstacked/")
 
+solov2018dir <- paste0(tcout, "solo_vs_2018law/")
+
 wtdir <- r"(C:\programs_python\puf_analysis\ignore\puf_versions\)"
 
 wtfname <- "allweights2018_geo2017_grown.csv"
@@ -1019,6 +1021,8 @@ cols_order$colname
 
 
 ## Individual reforms estimated in the JCT order
+
+## Changes by state
 ```{r}
 glimpse(df_changes_jct)
 
@@ -1089,6 +1093,450 @@ tab
 # vwidth = 992,   vheight = 744,
 
 ```
+
+
+## Changes by income range
+
+```{r us_changes}
+glimpse(df_changes_jct)
+
+
+tab_title <- "United States: Changes from 2017 law for major provisions of the TCJA, measured in sequence"
+tab_subtitle <- "Impact by income range, millions of dollars"
+
+# create a list of labels for columns
+tmp <- label_map %>%
+  filter(fullname_jct %in% names(df_changes_jct)) %>%
+  add_row(fullname_jct="other", colname="All other provisions combined")
+lablist <- split(tmp$colname, tmp$fullname_jct)
+
+data <- df_changes_jct %>%
+  filter(stabbr=="US") %>%
+  arrange(agi_stub) %>%
+  select(agi_label, all_of(label_map$fullname_jct), other, diff, pdiff) %>%
+  relocate(other, .before = `7_law2018`)
+
+tab <- data %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      agi_label="Adjusted gross income",
+      diff="Total change",
+      pdiff="% change"
+    ) %>%
+  cols_label(.list=lablist) %>%
+    fmt_currency(
+      columns = c(tmp$fullname_jct, "diff"),
+      rows=1,
+      decimals = 0,
+      scale_by = 1e-6,
+      suffixing = FALSE
+    ) %>%
+    fmt_number(
+      columns = c(tmp$fullname_jct, "diff"),
+      rows=2:nrow(data),
+      decimals = 0,
+      scale_by = 1e-6,
+      suffixing = FALSE
+    ) %>%
+    fmt_percent(
+      columns="pdiff",
+      scale_values = FALSE,
+      decimals = 1
+    ) %>% 
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+  tab_spanner(
+      label = "Tax change relative to 2018 law, estimated in left-to-right order, attributable to:",
+      columns = c(setdiff(label_map$fullname_jct, c("0_law2017", "7_law2018")), "other")
+    ) %>%
+    tab_source_note(source_note)
+  
+gtsave(tab, "2018vs2017_provisions_us_byagi_jctstack.png", path = here::here("results"), vwidth=2000, vheight=2000)
+tab
+# vwidth = 992,   vheight = 744,
+
+```
+
+
+```{r ny_changes}
+glimpse(df_changes_jct)
+
+
+tab_title <- "New York: Changes from 2017 law for major provisions of the TCJA, measured in sequence"
+tab_subtitle <- "Impact by income range, millions of dollars"
+
+# create a list of labels for columns
+tmp <- label_map %>%
+  filter(fullname_jct %in% names(df_changes_jct)) %>%
+  add_row(fullname_jct="other", colname="All other provisions combined")
+lablist <- split(tmp$colname, tmp$fullname_jct)
+
+data <- df_changes_jct %>%
+  filter(stabbr=="NY") %>%
+  arrange(agi_stub) %>%
+  select(agi_label, all_of(label_map$fullname_jct), other, diff, pdiff) %>%
+  relocate(other, .before = `7_law2018`)
+
+tab <- data %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      agi_label="Adjusted gross income",
+      diff="Total change",
+      pdiff="% change"
+    ) %>%
+  cols_label(.list=lablist) %>%
+    fmt_currency(
+      columns = c(tmp$fullname_jct, "diff"),
+      rows=1,
+      decimals = 0,
+      scale_by = 1e-6,
+      suffixing = FALSE
+    ) %>%
+    fmt_number(
+      columns = c(tmp$fullname_jct, "diff"),
+      rows=2:nrow(data),
+      decimals = 0,
+      scale_by = 1e-6,
+      suffixing = FALSE
+    ) %>%
+    fmt_percent(
+      columns="pdiff",
+      scale_values = FALSE,
+      decimals = 1
+    ) %>% 
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+  tab_spanner(
+      label = "Tax change relative to 2018 law, estimated in left-to-right order, attributable to:",
+      columns = c(setdiff(label_map$fullname_jct, c("0_law2017", "7_law2018")), "other")
+    ) %>%
+    tab_source_note(source_note)
+  
+gtsave(tab, "2018vs2017_provisions_nybyagi_jctstack.png", path = here::here("results"), vwidth=2000, vheight=2000)
+tab
+# vwidth = 992,   vheight = 744,
+
+```
+
+
+## Removing items from 2018 law, in isolation - how does it affect tax?
+
+```{r}
+# get the data
+(files <- list.files(solov2018dir))
+
+f <- function(file, dir, keepvars){
+  policy <- str_remove(file, ".parquet")
+  print(policy)
+  path <- paste0(dir, file)
+  df <- read_parquet(path, 
+                     col_select = all_of(keepvars)) %>%
+    mutate(policy=policy)
+  df
+}
+
+keepvars <- c("pid", "c00100", "iitax")
+policy_vs2018 <- map_dfr(files, f, solov2018dir, keepvars)
+
+count(policy_vs2018, policy)
+# [1] "amt2017_vs_law2018xQlimit"
+# [1] "law2017_vs_law2018xQlimit"
+# [1] "law2018xQlimit_vs_law2018xQlimit"
+# [1] "persx2017_vs_law2018xQlimit"
+# [1] "salt2017_vs_law2018xQlimit"
+# [1] "sd2017_vs_law2018xQlimit"
+
+```
+
+
+```{r}
+# prep the data
+collapse_v2018 <- weights_long %>%
+  left_join(policy_vs2018, by = "pid") %>%
+  left_join(pid_stubs %>% select(-c00100), by = "pid") %>%
+  group_by(policy, stabbr, agi_stub, filer) %>%
+  summarise(c00100=sum(weight * c00100, na.rm=TRUE),
+            iitax=sum(weight * iitax, na.rm=TRUE),
+            weight=sum(weight, na.rm=TRUE),
+            .groups="drop")
+summary(collapse_v2018)
+
+saveRDS(collapse_v2018, here::here("data", "collapse_v2018.rds"))
+
+```
+
+
+```{r}
+# add sums, get pdiffs
+collapse_v2018 <- readRDS(here::here("data", "collapse_v2018.rds"))
+
+sums <- collapse_v2018 %>%
+  group_by(policy, stabbr, filer) %>%  
+  summarise(c00100=sum(c00100, na.rm=TRUE),
+            iitax=sum(iitax, na.rm=TRUE),
+            .groups="drop") %>%
+  mutate(agi_stub=99)
+
+sums_all <- bind_rows(collapse_v2018, sums) %>%
+  left_join(agistubs %>% select(agi_stub, agi_label), by="agi_stub") %>%
+  mutate(stname=get_stname(stabbr)) %>%
+  arrange(policy, stabbr, agi_stub)
+
+# verify that we see familiar numbers
+sums_all %>% 
+  filter(stabbr=="US", agi_stub==99, filer) %>%
+  select(policy, iitax) %>%
+  mutate(iitax=iitax / 1e9)
+  
+
+# create our main analysis file
+# base_policy <- "law2018xQlimit_vs_law2018xQlimit"  # 2018 law with qbid ded limit false
+base_policy <- "law2017_vs_law2018xQlimit"  # this is simply 2017 law
+v2018_analysis <- sums_all %>%
+  filter(filer) %>%
+  select(-filer, -c00100) %>%
+  arrange(stabbr, agi_stub, policy) %>%
+  group_by(stabbr, agi_stub) %>%
+  mutate(base_policy = iitax[policy==base_policy],
+         diff=iitax - base_policy,
+         pdiff=ifelse(base_policy > 0, diff / base_policy * 100, NA_real_)) %>%
+  ungroup()
+glimpse(v2018_analysis)
+
+# create file with multiple policies vs 2017 law
+# compare each policy to 2017 law
+
+policy_2017 <- "law2017_vs_law2018xQlimit"
+policy_2018 <- "law2018xQlimit_vs_law2018xQlimit"
+v2018_analysis %>%
+  filter(stabbr=="US", agi_stub==99) %>%
+  select(policy, weight, iitax, base_policy, diff, pdiff)
+
+
+```
+
+
+```{r rows.print=30}
+# create table that compares different policies for NY to US values
+gaps <- v2018_analysis %>%
+  filter(stabbr %in% c("US", "NY")) %>%
+  select(-c(weight, base_policy, stname, iitax, diff)) %>%
+  pivot_wider(names_from = stabbr, values_from = pdiff) %>%
+  mutate(gap=NY - US) %>%
+  arrange(agi_stub, policy)
+
+gaps %>% filter(agi_stub==99)
+
+# create data for table
+# tcja, x salt, x sd, x amt (in isolation)
+pols <- c("law2018xQlimit_vs_law2018xQlimit", "salt2017_vs_law2018xQlimit", "sd2017_vs_law2018xQlimit",
+          "amt2017_vs_law2018xQlimit")
+data <- gaps %>%
+  filter(policy %in% pols) %>%
+  pivot_longer(cols=c(NY, US, gap)) %>%
+  # put vars in desired order
+  mutate(name=factor(name, levels=c("US", "NY", "gap")),
+         policy=factor(policy, levels=pols)) %>%
+  arrange(policy, name) %>%
+  unite("newcol", policy, name) %>%
+  pivot_wider(names_from = newcol) %>%
+  arrange(agi_stub) %>%
+  select(-agi_stub)
+
+col_names <- setdiff(names(data), "agi_label")
+col_labels <- rep(c("US", "NY", "gap"), 4)
+cbind(col_names, col_labels)
+
+# create a list of labels for columns
+lablist <- split(col_labels, col_names)
+
+#  col_names                              col_labels
+#  [1,] "law2018xQlimit_vs_law2018xQlimit_US"  "US"      
+#  [2,] "law2018xQlimit_vs_law2018xQlimit_NY"  "NY"      
+#  [3,] "law2018xQlimit_vs_law2018xQlimit_gap" "gap"     
+#  [4,] "salt2017_vs_law2018xQlimit_US"        "US"      
+#  [5,] "salt2017_vs_law2018xQlimit_NY"        "NY"      
+#  [6,] "salt2017_vs_law2018xQlimit_gap"       "gap"     
+#  [7,] "sd2017_vs_law2018xQlimit_US"          "US"      
+#  [8,] "sd2017_vs_law2018xQlimit_NY"          "NY"      
+#  [9,] "sd2017_vs_law2018xQlimit_gap"         "gap"     
+# [10,] "amt2017_vs_law2018xQlimit_US"         "US"      
+# [11,] "amt2017_vs_law2018xQlimit_NY"         "NY"      
+# [12,] "amt2017_vs_law2018xQlimit_gap"        "gap"
+
+tab_title <- "TCJA and TCJA with selected provisions removed"
+tab_subtitle <- "Percent change in federal income tax liability from 2017 law, in 2018"
+tab <- data %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      agi_label = "Adjusted gross income"
+    ) %>%
+    cols_label(.list=lablist) %>%
+    fmt_percent(
+      columns = 2:ncol(data),
+      scale_values = FALSE,
+      decimals = 1
+    ) %>%    
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+    tab_spanner(
+      label = html("Tax Cuts<br>and<br>Jobs Act"),
+      columns = 2:4
+    ) %>%
+    tab_spanner(
+      label = html("TCJA<br>without<br>SALT cap"),
+      columns = 5:7
+    ) %>%
+    tab_spanner(
+      label = html("TCJA<br>without standard<br>deduction increase"),
+      columns = 8:10
+    ) %>%
+    tab_spanner(
+      label = html("TCJA<br>without<br>AMT reductions"),
+      columns = 11:13
+    ) %>%
+    tab_style(
+      style = list(
+        cell_borders(sides = "right", color = "#000000", style = "solid", weight = px(0.5))
+      ),
+      locations =list(
+        cells_body(columns = c(4, 7, 10)),
+        cells_column_labels(columns = c(4, 7, 10))
+        )
+      ) %>%
+    cols_width(
+      var(2:13) ~ pct(7)
+    ) %>%
+    tab_source_note(source_note)
+
+gtsave(tab, "2018vs2017_selected_TCJAprovisions_removed.png", path = here::here("results"))
+tab
+
+
+
+```
+
+
+```{r}
+# just salt removed
+pols <- c("law2018xQlimit_vs_law2018xQlimit", "salt2017_vs_law2018xQlimit")
+data <- gaps %>%
+  filter(policy %in% pols) %>%
+  pivot_longer(cols=c(NY, US, gap)) %>%
+  # put vars in desired order
+  mutate(name=factor(name, levels=c("US", "NY", "gap")),
+         policy=factor(policy, levels=pols)) %>%
+  arrange(policy, name) %>%
+  unite("newcol", policy, name) %>%
+  pivot_wider(names_from = newcol) %>%
+  arrange(agi_stub) %>%
+  select(-agi_stub)
+
+col_names <- setdiff(names(data), "agi_label")
+col_labels <- rep(c("US", "NY", "gap"), 2)
+cbind(col_names, col_labels)
+
+# create a list of labels for columns
+lablist <- split(col_labels, col_names)
+
+
+tab_title <- "TCJA and TCJA with SALT cap removed"
+tab_subtitle <- "Percent change in federal income tax liability from 2017 law, in 2018"
+tab <- data %>%
+    gt() %>%  tab_header(
+      title = tab_title,
+      subtitle = tab_subtitle
+    ) %>%
+    cols_label(
+      agi_label = "Adjusted gross income"
+    ) %>%
+    cols_label(.list=lablist) %>%
+    fmt_percent(
+      columns = 2:ncol(data),
+      scale_values = FALSE,
+      decimals = 1
+    ) %>%    
+    tab_style(
+      style = list(
+        cell_fill(color = "#f7f7f7")
+      ),
+      locations = cells_body(
+        rows = seq(1, nrow(data), 2)
+        )
+    ) %>%
+    tab_spanner(
+      label = html("Tax Cuts<br>and<br>Jobs Act"),
+      columns = 2:4
+    ) %>%
+    tab_spanner(
+      label = html("TCJA<br>without<br>SALT cap"),
+      columns = 5:7
+    ) %>%
+    tab_style(
+      style = list(
+        cell_borders(sides = "right", color = "#000000", style = "solid", weight = px(0.5))
+      ),
+      locations =list(
+        cells_body(columns = c(4)),
+        cells_column_labels(columns = c(4))
+        )
+      ) %>%
+    # cols_width(
+    #   var(2:13) ~ pct(7)
+    # ) %>%
+    tab_source_note(source_note)
+gtsave(tab, "2018vs2017_SALTcap_removed.png", path = here::here("results"))
+tab
+
+```
+
+
+
+```{r}
+# create table for removing salt from tcja
+data <- v2018_analysis %>%
+  filter(policy=="salt2017_vs_law2018xQlimit") %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr, agi_stub) %>%
+  select(stname, agi_label, pdiff) %>%
+  pivot_wider(names_from = stname, values_from = pdiff)
+
+
+tab_title <- "abc"
+tab_subtitle <- "def"
+pdiff_wide_table(data, tab_title, tab_subtitle)
+
+
+```
+
+
 
 
 
