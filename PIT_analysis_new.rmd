@@ -129,7 +129,6 @@ label_map %>%
 
 
 ```{r locations}
-# define states of interest
 
 tcout <- r"(C:\programs_python\puf_analysis\ignore\taxcalc_output\)"
 
