@@ -10,7 +10,7 @@ output:
     toc: yes
     number_sections: yes
 editor_options:
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 
@@ -43,53 +43,21 @@ editor_options:
 -->
 
 
-```{r setup, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+```{r setup, eval=TRUE, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# note that eval=TRUE unless set to FALSE
 knitr::opts_chunk$set(echo = FALSE)
 options(width = 150)
 ```
 
 
 
-```{r libraries, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
-# source(here::here("includes", "libraries.r"))
-library(tidyverse)
-# if more than 60 rows, print 60 - enough for states
-options(tibble.print_max = 60, tibble.print_min = 60) 
-library(scales)
-library(readxl)
-
-library(arrow)
-
-library(RColorBrewer)
-
-library(maps)
-library(usmap)
-library(grid)
-library(gridExtra)
-
-library(btools) # Matt, get from my github page if needed
-# library(bdata) # Matt, get from my github page if needed
-library(ggrepel)
-library(gt)
-library(glue)
-library(DT)
-library(knitr)
-library(kableExtra)
-library(btools)
-library(bdata)
-
+```{r preliminaries, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+source(here::here("r", "libraries.r"))
 devtools::session_info()
 
-```
-
-
-```{r define_runtype}
-# pick one of the following
-# runtype <- "stack_saltfirst"
-# runtype <- "stack_jct"
+source(here::here("r", "functions.r"))
 
 ```
-
 
 
 ```{r reform_names}
@@ -104,8 +72,16 @@ persx2018, Personal exemption elimination
 qbid2018_limitfalse, Qualified business income deduction
 salt2018, SALT deduction cap
 amt2018, Alternative minimum tax reductions
-law2018, 2018 law
+law2018, TCJA in 2018
 ")
+# note that law2018 refers to TCJA (not including any subsequent law changes affecting 2018) and that I have
+# estimated it in Tax-Calculator setting the QBID limit switch to false
+
+# qbid2018_limitfalse is the name of the reform that sets the qbid limit to False
+# because we are walking from 2017 law to the TCJA, reforms to the right of qbid2018_limitfalse have
+# the limit set to false, so by the time we get to law2018 we have the switch false -- in other words,
+# in these stacked runs law2018 is the TCJA with the limit set to False meaning that taxpayers use the 
+# full QBID deduction.
 
 order_jct <- c("law2017", "allrates2018", "sd2018", "persx2018", "qbid2018_limitfalse", "salt2018", "amt2018", "law2018")
 order_saltfirst <- c("law2017", "salt2018", "sd2018", "persx2018", "qbid2018_limitfalse", "amt2018", "allrates2018", "law2018")
@@ -124,23 +100,19 @@ label_map %>%
 # policy_colnames <- policy_colnames_jct
 # policy_colnames <- str_sub(policystack, 3, -1) # fine as long as prefix is not greater than 9
 
-
 ```
 
 
 ```{r locations}
 
-tcout <- r"(C:\programs_python\puf_analysis\ignore\taxcalc_output\)"
+tcout <- r"(C:\programs_python\puf_analysis\ignore\puf_versions\taxcalc_output\)"
 
 jctdir <- paste0(tcout, "stack_jct/")
 saltdir <- paste0(tcout, "stack_saltfirst/")
-solodir <- paste0(tcout, "unstacked/")
+solo2017dir <- paste0(tcout, "solo_vs_2017law/")
+solo2018dir <- paste0(tcout, "solo_vs_2018law/")
 
-solov2018dir <- paste0(tcout, "solo_vs_2018law/")
-
-wtdir <- r"(C:\programs_python\puf_analysis\ignore\puf_versions\)"
-
-wtfname <- "allweights2018_geo2017_grown.csv"
+wtdir <- r"(C:\programs_python\puf_analysis\ignore\puf_versions\weights\)"
 
 
 ```
@@ -155,204 +127,40 @@ idvars <- c("stack", "stabbr", "stname", "agi_stub", "agi_label")
 usny_sort <- c("US", "NY", "AR", "CA", "CT", "FL", "MA", "NJ",  "PA", "TX", "other")
 nyus_sort <- c("NY", "US", "AR", "CA", "CT", "FL", "MA", "NJ",  "PA", "TX", "other")
 
-source_note <- "\nAuthors' analysis of a sample of tax returns constructed to be representative of states at 2018 income levels."
+source_note <- "\nAuthors' analysis of a sample of tax returns constructed to be representative of states at 2018 income levels.\nNote: Amounts under TCJA will differ from reported totals for 2018 due to taxpayer responses, post-TCJA law changes, and technical factors."
 
 ```
 
 
-```{r functions_utilities}
-get_stname <- function(stabbr){
-  stname <- case_when(stabbr == "US" ~ "United States",
-                      stabbr == "other" ~ "Other states combined",
-                      stabbr %in% state.abb ~ state.name[match(stabbr, state.abb)],
-                      TRUE ~ "ERROR")
-  return(stname)
-}
-# get_stname(usny_sort)
+# Data preparation
 
-get_stabbr <- function(stname){
-  stabbr <- case_when(stname == "United States" ~ "US",
-                      stname == "Other states combined" ~ "other",
-                      stname %in% state.name ~ state.abb[match(stname, state.name)],
-                      TRUE ~ "ERROR")
-  return(stabbr)
-}
-# get_stabbr(get_stname(usny_sort))
+## Data notes for Don and Matt:
 
-
-html_wrap <- function(s, len){
-  # gt uses <br> to break columns in html, rather than \n, so 
-  # wrap lines and then replace \n with <br> for column headings
-  wrapped <- str_wrap(s, 15)
-  return(str_replace_all(wrapped, "\\n", "<br>"))
-}
+*   CAUTIONS:
+    +   There is a distinction between the TCJA and 2018 law.
+    +   This document reports on the impact of the TCJA, not 2018 law.
+    +   Some of the discussion inadvertently may call it 2018 law. I have tried to correct this, but some variable names in the program below include 2018 law in their names but they actually examined TCJA
+    +   The difference is that CARES Act amendments in 2020 eliminated the business loss limitation imposed by the TCJA. That limitation *increased* taxes by limiting certain large losses (e.g., from business or professional income, or partnership/S Corporation income).
+    +   Much of its impact would have been felt in the lowest and highest AGI ranges, where taxpayers with many of these large losses are.
+    +   Thus the 2018 tax cut ultimately will be larger than the TCJA tax-cut numbers shown here, presuming taxpayers file amended 2018 returns to take advantage of the CARES Act changes.
+    
+*   This document reports on:
+    + Reforms in isolation vs 2017 law, from the folder solo_vs_2017law
+    + Reforms in isolation vs TCJA, from the folder solo_vs_2018law
+    + Reforms vs 2017 law, stacked in the JCT stacking order, from the folder
+    
+*   Key variable names
+    +   TCJA goes by the name law2018xQlimit, which is 2018 law as *defined by TCJA* with qbid limit set to false; this means that taxpayers are assume to avoid/minimize the limit on the QBID dedution. See discussion here. If instead the limit were assumed to be binding, taxpayers would have a smaller QBID deduction and higher income tax liabilities.
+    +   2017 law variable name is law2017 
 
 
-```
+## Get stubs
 
+Create stub files for:
 
+*   income ranges we report on, which are the HT2 income ranges with the first 3 ranges collapsed (Under $1, $1 under $10k, and $10k under $25k)
+*   person ids (pids)
 
-```{r functions_data}
-
-pol_change <- function(wide, policy1, policy2, vname="iitax"){
-  # generic function to take two policies and create a file with changes and percent changes
-  p1name <- policy1
-  p2name <- policy2
-  data <- wide %>%
-    filter(variable==all_of(vname)) %>%
-    rename(policy1=all_of(policy1), policy2=all_of(policy2)) %>%
-    mutate(p1name=p1name, p2name=p2name, 
-           diff=policy2 - policy1,
-           pdiff=ifelse(policy1 > 0, diff / policy1 * 100, NA_real_)) %>% 
-    select(variable, p1name, p2name, all_of(idvars), policy1, policy2, diff, pdiff)
-  return(data)
-}
-
-
-```
-
-
-```{r functions_tables}
-pol_change_table <- function(data, tab_title, tab_subtitle, p1name, p2name){
-  stub <- names(data)[1]
-  stub_label <- ifelse(stub=="stname", "", "Adjusted gross income")
-  dollar_scale <- ifelse(stub=="stname", 1e-9, 1e-6)
-  dollar_decimal <- ifelse(stub=="stname", 1, 0)
-  # dollar_scale_label <- ifelse(stub=="stname", "millions", "billions")
-  
-  p1label <- html_wrap(p1name, 15)
-  p2label <- html_wrap(p2name, 15)
-  
-  tab <- data %>%
-    rename(stub=all_of(stub)) %>%
-    gt() %>%  tab_header(
-      title = tab_title,
-      subtitle = tab_subtitle
-    ) %>%
-    cols_label(
-      stub = stub_label,
-      policy1 = html(p1label),
-      policy2 = html(p2label),
-      diff = html("$ change"),
-      pdiff = html("% change")
-    ) %>%
-    fmt_currency(
-      columns = c("policy1", "policy2", "diff"),
-      rows=1,
-      decimals = dollar_decimal,
-      scale_by = dollar_scale,
-      suffixing = FALSE
-    ) %>%
-    fmt_number(
-      columns = c("policy1", "policy2", "diff"),
-      rows=2:nrow(data),
-      decimals = dollar_decimal,
-      scale_by = dollar_scale,
-      suffixing = FALSE
-    ) %>%
-    fmt_percent(
-      columns="pdiff",
-      scale_values = FALSE,
-      decimals = 1
-    ) %>% 
-    tab_style(
-      style = list(
-        cell_fill(color = "#f7f7f7")
-      ),
-      locations = cells_body(
-        rows = seq(1, nrow(data), 2)
-        )
-    ) %>%
-    tab_source_note(source_note)
-  return(tab)
-}
-
-
-pdiff_wide_table <- function(data, tab_title, tab_subtitle){
-  data %>%
-    gt() %>%  tab_header(
-      title = tab_title,
-      subtitle = tab_subtitle
-    ) %>%
-    cols_label(
-      agi_label = "Adjusted gross income"
-    ) %>%
-    fmt_percent(
-      columns=2:ncol(data),
-      scale_values = FALSE,
-      decimals = 1
-    ) %>% 
-    tab_style(
-      style = list(
-        cell_fill(color = "#f7f7f7")
-      ),
-      locations = cells_body(
-        rows = seq(1, nrow(data), 2)
-        )
-    ) %>%
-    tab_source_note(source_note)
-}
-
-diff_wide_table <- function(data, tab_title, tab_subtitle){
-  data %>%
-    gt() %>%  tab_header(
-      title = tab_title,
-      subtitle = tab_subtitle
-    ) %>%
-    cols_label(
-      agi_label = "Adjusted gross income"
-    ) %>%
-    fmt_currency(
-      columns = 2:ncol(data),
-      rows=1,
-      decimals = 0,
-      suffixing = FALSE
-    ) %>%
-    fmt_number(
-      columns = 2:ncol(data),
-      rows=2:nrow(data),
-      decimals = 0,
-      suffixing = FALSE
-    ) %>%    
-    tab_style(
-      style = list(
-        cell_fill(color = "#f7f7f7")
-      ),
-      locations = cells_body(
-        rows = seq(1, nrow(data), 2)
-        )
-    ) %>%
-    tab_source_note(source_note)
-}
-
-
-```
-
-
-```{r functions_state_byagi_table}
-get_state_policies <- function(st, policy1, policy2){
-  data <- df_changes_jct %>%
-    filter(stabbr==st) %>%
-    select(all_of(idvars), policy1=all_of(policy1), policy2=all_of(policy2), diff, pdiff) %>%
-    arrange(agi_stub) %>%
-    select(agi_label, policy1, policy2, diff, pdiff)
-  return(data)
-}
-
-get_state_tab <- function(st, policy1, policy2, p1name, p2name, dollars){
-  data <- get_state_policies(st, policy1, policy2)
-  tab_title <- paste0(get_stname(st), ": Total federal income tax liability in 2018: ", p1name, ", and ", p2name)
-  tab_subtitle <- paste0("Amounts are in ", dollars, " of 2018 dollars")
-  tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
-  return(tab)
-}
-
-```
-
-
-# Get data
-
-## stubs
 ```{r stubs, rows.print=13}
 # , "filer", "ht2_stub", "ht2range"
 
@@ -387,7 +195,7 @@ get_stub <- function(agi, agi_bounds){
 
 # get_stub(c(-1000, 0, 24999, 25e3, 1e9), agi_bounds) # check
 
-# define agi stub for every person in 2017 base year
+# define agi stub for every person under 2017 law in 2018 income year
 pid_stubs <- basedf %>%
   select(pid, filer, c00100) %>%
   mutate(agi_stub=get_stub(c00100, agi_bounds)) %>%
@@ -395,9 +203,46 @@ pid_stubs <- basedf %>%
 
 ```
 
+
 ## weights
+
+Get national and state weights for each record (matched on pid):
+
+*   The weights currently come from allweights2018_geo2017_grown.csv, which are state weights that for each record are constrained to sum to the record's national weight
+*   I may also examine unconstrained weights but not yet
+
+
+```{r ONETIME_weights_unrestricted}
+# FOR TESTING PURPOSES: create 2018 weights that do NOT have an adding-up restriction requiring state weights
+# to sum to the national weight for each record
+# we have a suitable file for 2017 but have to advance it to 2018 (as I did not do that in python)
+
+# get 2017 unrestricted weights and grow to 2018
+weights2017_unrestricted <- read_csv(paste0(wtdir, "allweights2017_geo_unrestricted.csv"))
+weights2017_default <- read_csv(paste0(wtdir, "weights2017_default.csv"))
+weights2018_default <- read_csv(paste0(wtdir, "weights2018_default.csv"))
+ratios <- left_join(
+  weights2017_default %>% select(pid, w2017=weight),
+  weights2018_default %>% select(pid, w2018=weight),
+  by="pid") %>%
+  mutate(ratio=w2018 / w2017)
+quantile(ratios$ratio)
+(wratio <- sum(ratios$w2018) / sum(ratios$w2017))
+
+weights_unrestricted <- weights2017_unrestricted %>%
+  mutate(across(.cols=-c(pid, ht2_stub), ~ .x * wratio))
+
+write_csv(weights_unrestricted, paste0(wtdir, "allweights2018_geo2017_unrestricted_grown.csv"))
+
+```
+
+
 ```{r weights}
-weights <- read_csv(paste0(wtdir, wtfname))
+weights_restricted <- read_csv(paste0(wtdir, "allweights2018_geo2017_grown.csv"))
+weights_unrestricted <- read_csv(paste0(wtdir, "allweights2018_geo2017_unrestricted_grown.csv"))
+
+# PICK ONE of the two sets of weights
+weights <- weights_restricted  # THIS LINE IS IMPORTANT - CHOOSE which set of weights to use
 
 weights_long <- weights %>%
   rename("US"="weight") %>%
@@ -411,16 +256,26 @@ setdiff_all(sts, nyus_sort)  # should be no difference
 ```
 
 
-## stacked data
+## Get reforms that walk from 2017 law to TCJA
+
+Create dataframe with individual records from two kinds of files, each of which walks from 2017 law to TCJA law in 2018:
+
+*   Reforms in JCT stacking order (used primarily or exclusively below)
+*   Reforms in a SALT-first stacking order (not reported on below, or explicitly identified if reported on)
+
+The variable stack gives the stacking order.
+
 ```{r reforms, rows.print=25}
 # get ALL of the stacked reforms -- jct stacking and salt-first stacking
 # for now keep a minimal list of information about each reform
 
 get_file <- function(policy, policydir, keepvars){
   fname <- paste0(policydir, policy, ".parquet")
+  
   stack <- case_when(str_detect(policydir, "stack_jct") ~ "jct",
                      str_detect(policydir, "stack_saltfirst") ~ "saltfirst",
                      TRUE ~ "ERROR")
+  
   df <- read_parquet(fname, 
                      col_select = all_of(keepvars)) %>%
     mutate(policy=policy,
@@ -443,9 +298,13 @@ count(policydf, stack, policy)
 
 ```
 
-## unstacked data and produce a quick table of differences
+
+## Get data files of reforms vs. 2017 law in isolation (unstacked)
+
+And produce a quick table of national-sum differences vs. 2017 law.
+
 ```{r}
-pnames <- list.files(solodir) %>% str_remove(".parquet")
+pnames <- list.files(solo2017dir) %>% str_remove(".parquet")
 
 get_solo <- function(policy, policydir, keepvars){
   fname <- paste0(policydir, policy, ".parquet")
@@ -456,7 +315,7 @@ get_solo <- function(policy, policydir, keepvars){
 }
 
 # get_solo(pnames[1], solodir, c("pid", "s006", "c00100", "iitax"))
-dfsolo <- map_dfr(pnames, get_solo, solodir, c("pid", "s006", "c00100", "iitax"))
+dfsolo <- map_dfr(pnames, get_solo, solo2017dir, c("pid", "s006", "c00100", "iitax"))
 
 # quick table of national differences
 solosums <- dfsolo %>%
@@ -469,7 +328,7 @@ solosums %>%
   mutate(diff=iitax - iitax[policy=="law2017_vs_law2017"],
          pdiff = diff / iitax[policy=="law2017_vs_law2017"] * 100) %>%
   arrange(diff) %>%
-  kable(digits=2, format.args=list(big.mark=","))
+  kable(digits=2, format.args=list(big.mark=","), format="rst")
 
 synergy <- solosums %>%
   filter(policy != "law2018_vs_law2017") %>%
@@ -481,13 +340,16 @@ synergy <- solosums %>%
             sumdiffs=sum(diff[!policy %in% c("law2017_vs_law2017", "law2018xQlimit_vs_law2017")])) %>%
   mutate(netdiff=law2018xqlimit - law2017,
          synergy=netdiff - sumdiffs)
-synergy
+# synergy
 
 
 ```
 
 
-## collapse unstacked data
+## Collapse reforms-vs-2017-law-in-isolation, by state, income range, reform
+
+dataframe `iitax_filers_unstack` has the main result
+
 ```{r}
 # make solo_wide table dfsolo
 
@@ -512,18 +374,6 @@ collapse_all_unstack <- bind_rows(collapse_unstack, agisums_unstack) %>%
   mutate(stname=get_stname(stabbr)) %>%
   arrange(policy, stabbr, agi_stub)
 
-# check filer and nonfiler sums
-# collapse_all %>%
-#   filter(stack=="jct", stabbr=="US", agi_stub==99) %>%
-#   select(policy, filer, c00100, iitax) %>%
-#   pivot_longer(cols=c(c00100, iitax)) %>%
-#   mutate(filer=ifelse(filer, "filer", "nonfiler")) %>%
-#   pivot_wider(names_from = "filer") %>%
-#   mutate(nonfile_pct=nonfiler / (nonfiler + filer) * 100) %>%
-#   arrange(name, -nonfile_pct) %>%
-#   kable(digits=2, format.args=list(big.mark=","), caption="Non filers percent")
-  
-
 # this is our main analysis file
 iitax_filers_unstack <- collapse_all_unstack %>%
   filter(filer) %>%
@@ -535,15 +385,21 @@ solo_wide <- collapse_all_unstack %>%
   select(-filer, -c00100) %>%
   pivot_wider(names_from = policy, values_from = iitax)
 
-
 ```
 
 
 
-## collapse stacked data and keep weights, too
+## Collapse reforms that walk from 2017 law to TCJA by state, income range, and reform
+
+Main analysis file is `iitax_filers`.
+
+Includes reforms stacked in JCT and SALT-first stacking orders
+
+
 ```{r ONETIME_collapse}
 # collapse by stack, policy, state, agi range
 # this will be the main file that forms the basis of almost all analysis
+# MUST BE RECREATED WHENEVER WE USE A DIFFERENT SET OF WEIGHTS
 
 collapse <- weights_long %>%
   left_join(policydf, by = "pid") %>%
@@ -558,6 +414,8 @@ summary(collapse)
 saveRDS(collapse, here::here("data", "collapse.rds"))
 
 ```
+
+Create analysis files, one for each stacking order, with change from one policy to the next, in the stacking order
 
 
 ```{r create_analysis_file, rows.print=20}
@@ -576,122 +434,134 @@ collapse_all <- bind_rows(collapse, agisums) %>%
   mutate(stname=get_stname(stabbr)) %>%
   arrange(stack, policy, stabbr, agi_stub)
 
-# check filer and nonfiler sums
-# collapse_all %>%
-#   filter(stack=="jct", stabbr=="US", agi_stub==99) %>%
-#   select(policy, filer, c00100, iitax) %>%
-#   pivot_longer(cols=c(c00100, iitax)) %>%
-#   mutate(filer=ifelse(filer, "filer", "nonfiler")) %>%
-#   pivot_wider(names_from = "filer") %>%
-#   mutate(nonfile_pct=nonfiler / (nonfiler + filer) * 100) %>%
-#   arrange(name, -nonfile_pct) %>%
-#   kable(digits=2, format.args=list(big.mark=","), caption="Non filers percent")
-  
 
-# this is our main analysis file
+# this is our main analysis file -- change is compared to the previous value in the stack for this state, income group
+# CAUTION: this relies on policy names having numeric prefix
 iitax_filers <- collapse_all %>%
   filter(filer) %>%
   select(-filer, -c00100) %>%
   arrange(stack, stabbr, agi_stub, policy) %>%
   group_by(stack, stabbr, stname, agi_stub) %>%
-  mutate(change=iitax - lag(iitax))
+  mutate(change_vprior=iitax - lag(iitax)) %>%
+  ungroup
+
+# change_v2018=iitax - last(iitax)
 
 
 # functions to make a wide tax file and a wide change file, for a given stacking order
 iitax_filers
-stack_keep <- "jct"
 
 get_wide <- function(stack_keep){
   iitax_filers %>%
     filter(stack==stack_keep) %>%
-    select(-change) %>%
+    select(-change_vprior) %>%
     pivot_wider(names_from=policy, values_from=iitax) %>%
     arrange(stack, stabbr, agi_stub, agi_label)
 }
 
 
 # make a file of changes for each stacking order that walks from 2017 to 2018 law
+# stack_keep <- "jct"
+
+
 get_changedf <- function(stack_keep){
+  # create a dataframe, for a given stacking order, that has 2017 law on the
+  # left, TCJA on the right, and changes from the previous reform
+  # as we move from 2017 to TCJA (in stacking order)
   
+  # define the policies in this stacking order; relies on names having
+  # numeric prefix
   policies <- case_when(stack_keep == "jct" ~ label_map$fullname_jct,
                         stack_keep == "saltfirst" ~ label_map$fullname_salt,
                         TRUE ~ "ERROR") %>% sort()
   
-  policies_use <- setdiff(policies, policies[1])
+  # drop 2017 law
+  start_policy <- policies[1]
+  end_policy <- policies[length(policies)]
+  policies_use <- setdiff(policies, start_policy)
     
+  # first get the middle part -- the changes as we walk from 2017 to TCJA
+  # create an "other" change which is the change from the last policy
+  # in the stacking order and final TCJA law
   changes <- iitax_filers %>% 
     filter(stack==stack_keep, policy %in% policies_use) %>%
-    select(-iitax) %>%
-    pivot_wider(names_from = policy, values_from = change) %>%
+    select(-iitax, -weight) %>%  # not needed in this analysis
+    pivot_wider(names_from = policy, values_from = change_vprior) %>%
     rename(other=policies[length(policies)])
   
   change_order <- setdiff(names(changes), idvars)
   
   # now bring in the ends and compute total change
   ends <- iitax_filers %>% 
-    filter(stack==stack_keep, policy %in% policies[c(1, length(policies))]) %>%
-    select(-change) %>%
+    filter(stack==stack_keep, 
+           policy %in% c(start_policy, end_policy)) %>%  # keep just 2017 law and TCJA
+    select(-change_vprior, -weight) %>%
     pivot_wider(names_from = policy, values_from = iitax)
   
-  start <- policies[1]
-  end <- policies[length(policies)]
   
   changedf <- left_join(changes, ends, by=idvars) %>%
-    select(all_of(idvars), policies[1], all_of(change_order), policies[length(policies)]) %>%
-    mutate(diff=!!as.name(end) - !!as.name(start),
-           pdiff=ifelse(!!as.name(start) > 0, diff / !!as.name(start) * 100, NA_real_)) %>%
+    select(all_of(idvars), all_of(start_policy), all_of(change_order), all_of(end_policy)) %>%
+    mutate(diff=!!as.name(end_policy) - !!as.name(start_policy),
+           pdiff=ifelse(!!as.name(start_policy) > 0, diff / !!as.name(start_policy) * 100, NA_real_)) %>%
     ungroup()
   return(changedf)
 }
 
 
-get_wide("jct")
-get_wide("saltfirst")
-
-get_changedf("jct")
-get_changedf("saltfirst")
+# get_wide("jct")
+# get_wide("saltfirst")
+# 
+# get_changedf("jct")
+# get_changedf("saltfirst")
 
 # create separate data frames of changes because they will not have the same columns
 df_changes_jct <- get_changedf("jct")
 df_changes_saltfirst <- get_changedf("saltfirst")
 
+df_changes_jct %>%
+  filter(stabbr=="NY") %>%
+  select(stack, stabbr, stname, agi_stub, agi_label, `0_law2017`, `5_salt2018`, `7_law2018`)
+
+df_changes_saltfirst %>%
+  filter(stabbr=="NY") %>%
+  select(stack, stabbr, stname, agi_stub, agi_label, `0_law2017`, `1_salt2018`, `7_law2018`)
+
 
 ```
+
 
 # Begin analysis
 ## Change from 2017 law to 2018 law
 
 ```{r}
-# prep
+# define variable mapping using the desired stacking order (generally jct)
 mapdf <- label_map %>%
   arrange(jct) %>%
   select(jct, policyvar, colname, fullname=fullname_jct)
-vars <- mapdf$fullname[c(1, nrow(mapdf))]
 
-policy1 <- vars[1]
-p1name <- "2017 law"
+# define the policyvars to analyze and get their full names and labels from the mapping df
+policyvars <- c("law2017", "law2018")
+idx <- match(policyvars, mapdf$policyvar)
+fullnames <- mapdf$fullname[idx]
+colnames <- mapdf$colname[idx]
 
-policy2 <- vars[2]
-p2name <- "2018 law"
-
+data <- df_changes_jct %>%
+  filter(agi_stub==99) %>%
+  select(idvars, policy1=all_of(fullnames[1]), policy2=all_of(fullnames[2]), diff, pdiff) %>%
+  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+  arrange(stabbr) %>%
+  select(stname, policy1, policy2, diff, pdiff)
 
 ```
 
 
 ```{r 2018vs2017_summary, rows.print=20}
 
-data <- df_changes_jct %>%
-  filter(agi_stub==99) %>%
-  select(idvars, policy1=all_of(policy1), policy2=all_of(policy2), diff, pdiff) %>%
-  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
-  arrange(stabbr) %>%
-  select(stname, policy1, policy2, diff, pdiff)
-
-tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 law"
+tab_title <- "Total federal income tax liability in 2018 calculated under 2017 law and under the TCJA"
 tab_subtitle <- "Amounts are in billions of 2018 dollars"
 
 
-tab <- pol_change_table(data, tab_title, tab_subtitle, p1name, p2name)
+tab <- pol_change_table(data, tab_title, tab_subtitle, colnames[1], colnames[2])
 gtsave(tab, "2018vs2017_summary_table.png", path = here::here("results"))
 
 tab
@@ -700,28 +570,9 @@ tab
 
 
 ```{r taxcut_plot}
-# data %>%
-#   mutate(stabbr=get_stabbr(stname),
-#          baseshare=policy1 / policy1[stname=="United States"] * 100,
-#          cutshare=diff / diff[stname=="United States"] * 100) %>%
-#   filter(!stabbr %in% c("US", "other")) %>%
-#   ggplot(aes(baseshare, cutshare, label=stname))  +
-#   geom_point() + 
-#   geom_text()
-
-
-# data %>%
-#   mutate(stabbr=get_stabbr(stname),
-#          baseshare=policy1 / policy1[stname=="United States"] * 100,
-#          cutshare=diff / diff[stname=="United States"] * 100) %>%
-#   filter(!stabbr %in% c("US", "other")) %>%
-#   pivot_longer(cols=c(baseshare, cutshare)) %>%
-#   ggplot(aes(x=stname, y=value, fill=name)) +
-#     geom_bar(stat="identity", position=position_dodge())
-
 p <- data %>%
   mutate(stabbr=get_stabbr(stname), pdiff=-pdiff,
-         stname=ifelse(stabbr=="other", "States not\nshown, in\n aggregate", stname),
+         stname=ifelse(stabbr=="other", "Other states\ncombined", stname),
          stname=ifelse(stabbr=="US", "United\nStates", stname),
          grp=case_when(stabbr=="US" ~ 1,
                        stabbr=="NY" ~2,
@@ -735,7 +586,7 @@ p <- data %>%
     geom_hline(yintercept = -data$pdiff[data$stname=="United States"], size=0.1, colour="#525252") +
     theme_bw() +
     theme(legend.position = "none") +
-    ggtitle("Tax cut in 2018 as percent of tax liability under 2017 law")
+    ggtitle("TCJA tax cut in 2018 as percent of tax liability under 2017 law")
 p
 ggsave(filename=here::here("results", "taxcut_barchart.png"), plot=p, width=9, height=6, scale=1)
 
@@ -749,7 +600,8 @@ dollars <- "millions"
 
 for(st in nyus_sort){
   print(st)
-  tab <- get_state_tab(st, policy1, policy2, p1name, p2name, dollars)
+  tab_title_suffix <- "Total federal income tax liability in 2018 calculated under 2017 law and under the TCJA"
+  tab <- get_state_tab(st, fullnames[1], fullnames[2], colnames[1], colnames[2], tab_title_suffix, dollars)
   gtsave(tab, paste0("2018vs2017_byagi_table_", st, ".png"), path = here::here("results"))
   # print(tab)
 }
@@ -760,8 +612,8 @@ for(st in nyus_sort){
 
 ```{r 2018vs2017_pdiff_byagi_wide, rows.print=20}
 
-tab_title <- "Total federal income tax liability in 2018: 2017 law, and 2018 tax law"
-tab_subtitle <- "Percent change from 2017 law to 2018 law"
+tab_title <- "Total federal income tax liability in 2018 calculated under 2017 law and under the TCJA"
+tab_subtitle <- "Percent change from 2017 law to TCJA in 2018"
 
 pol_change <- function(wide, policy1, policy2){
   # generic function to take two policies and create a file with changes and percent changes
@@ -1805,6 +1657,7 @@ data %>%
 
 ```
 
+
 ```{r}
 xwalk_table <- function(data, tab_title, tab_subtitle){
   data %>%
@@ -1903,6 +1756,82 @@ tab <- data %>%
     tab_source_note(source_note)
 
 gtsave(tab, "2017to2018_xwalk.png", path = here::here("results"))
+
+
+```
+
+
+# PUF check
+```{r}
+# puf2017law_2018levels_default.parquet
+# pufTCJA_2018levels_default.parquet
+
+# puf default 2017 law 2017 income
+puf20172017 <- read_parquet(paste0(tcout, "puf2017_default.parquet"),
+                       col_select = all_of(c("pid", "filer", "s006", "c00100", "iitax")))
+df <- puf20172017 %>%
+  filter(filer) %>%
+  mutate(agi_stub=get_stub(c00100, agi_bounds),
+         c00100=c00100 * s006,
+         iitax=iitax * s006) %>%
+  group_by(agi_stub) %>%
+  summarise(c00100=sum(c00100, na.rm=TRUE),
+            iitax=sum(iitax, na.rm=TRUE),
+            .groups="drop")
+
+dfsums <- df %>%
+  summarise(c00100=sum(c00100),
+            iitax=sum(iitax),
+            .groups="drop") %>%
+  mutate(agi_stub=99)
+
+df2 <- bind_rows(df, dfsums) %>%
+  left_join(agistubs %>% select(agi_stub, agi_label), by = "agi_stub") %>%
+  mutate(c00100=c00100 / 1e9,
+         iitax=iitax / 1e9) %>%
+  select(agi_stub, agi_label, c00100, iitax)
+
+df2 %>%
+  kable(digits=c(0, 0, 3, 3), format.args = list(big.mark=","), format="rst")
+
+
+
+p2017law <- read_parquet(paste0(tcout, "puf2017law_2018levels_default.parquet"),
+                       col_select = all_of(c("pid", "filer", "s006", "c00100", "iitax")))
+# use 2017 puf stubs
+puf_stubs <- p2017law %>%
+  select(pid, filer, c00100) %>%
+  mutate(agi_stub=get_stub(c00100, agi_bounds)) %>%
+  arrange(pid)
+
+pTCJA <- read_parquet(paste0(tcout, "pufTCJA_2018levels_default.parquet"),
+                       col_select = all_of(c("pid", "filer", "s006", "c00100", "iitax")))
+
+# stack and collapse
+pufstack <-
+  bind_rows(p2017law %>% mutate(ftype="law2017"),
+            pTCJA %>% mutate(ftype="tcja")) %>%
+  filter(filer) %>% # all zero
+  left_join(puf_stubs %>% select(pid, agi_stub), by="pid") %>%
+  mutate(value=iitax * s006) %>%
+  group_by(ftype, agi_stub) %>%
+  summarise(value=sum(value, na.rm=TRUE), .groups="drop")
+
+pufsums <- pufstack %>%
+  group_by(ftype) %>%
+  summarise(value=sum(value), .groups="drop") %>%
+  mutate(agi_stub=99)
+
+pufstack2 <- bind_rows(pufstack, pufsums) %>%
+  left_join(agistubs %>% select(agi_stub, agi_label), by = "agi_stub") %>%
+  mutate(value=value / 1e9) %>%
+  pivot_wider(names_from = ftype) %>%
+  mutate(diff=tcja - law2017,
+         pdiff=diff / law2017 * 100)
+
+pufstack2 %>%
+  kable(digits=c(0, 0, 3, 3, 3, 1), format.args = list(big.mark=","), format="rst")
+
 
 
 ```

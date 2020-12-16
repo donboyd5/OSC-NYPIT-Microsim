@@ -350,22 +350,92 @@ dfl <- df %>%
   pivot_longer(cols=-c(pid, filer, ht2_stub, ht2range, reform))
 
 
-# look at default 2017 puf ----
+# look at default 2017 puf and regrown 2017 puf ----
 # C:\programs_python\puf_analysis\ignore\puf_versions
 # puf2017_default.parquet
 defdir <- r"(C:\programs_python\puf_analysis\ignore\puf_versions\)"
 defpuf <- "puf2017_default.parquet"
-puf2017 <- read_parquet(paste0(defdir, defpuf))
+rgpuf <- "puf2017_regrown.parquet"
+puf2017a <- read_parquet(paste0(defdir, defpuf)) %>%
+  mutate(ftype="pufdefault2017")
+puf2017b <- read_parquet(paste0(defdir, rgpuf))
+
+check <- puf2017a %>%
+  select(RECID, s006a=s006) %>%
+  left_join(puf2017b %>% select(RECID, s006b=s006),
+            by="RECID")
+
+# get the initial reweights for puf2017b
+ns(puf2017b)
+rw1 <- read_csv(paste0(defdir, "weights_reweight1_ipopt.csv"))
+puf2017b2 <- puf2017b %>%
+  left_join(rw1 %>% select(pid, weight), by="pid") %>%
+  mutate(s006=ifelse(is.na(weight), s006, weight),
+         ftype="rgrw2017") %>%
+  select(-weight)
+
+
+
 ns(puf2017)
 count(puf2017, FLPDYR)
 
-vars <- c("pid", "RECID", "filer", "s006", "c00100", "c04800", "iitax", "e00900", "e02000")
-dfl <- puf2017 %>%
+
+ystubs <- c(-9e99, 1.0, 10e3, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, 1e6, 9e99)
+check <- c(-10, -1, 0, 1, 1000, 9999, 10e3, 10001, 1e9)
+cut(check, ystubs, right=FALSE)
+
+puffile <- puf2017b2
+puffile <- puf2017a
+vars <- c("ftype", "pid", "RECID", "filer", "s006", "c00100", "c04800", "iitax", "e00900", "e02000")
+dfl <- puffile %>%
   select(all_of(vars)) %>%
-  mutate(e00900_neg=(e00900 < 0) * e00900,
+  mutate(agigroup=cut(c00100, ystubs, right=FALSE),
+         agilev=as.numeric(agigroup),
+         agilab=as.character(agigroup),
+         e00900_zpos=(e00900 >= 0) * e00900,
+         e02000_zpos=(e02000 >= 0) * e02000,
+         e00900_neg=(e00900 < 0) * e00900,
          e02000_neg=(e02000 < 0) * e02000) %>%
-  pivot_longer(cols=-c(pid, RECID, filer, s006)) %>%
+  select(-agigroup) %>%
+  pivot_longer(cols=-c(ftype, pid, RECID, filer, agilev, agilab, s006)) %>%
   mutate(wvalue=s006 * value)
+
+dfsums1 <- dfl %>%
+  group_by(ftype, filer, agilev, agilab, name) %>%
+  summarise(wvalue=sum(wvalue, na.rm=TRUE), .groups="drop")
+
+dfsums2 <- dfsums1 %>%
+  group_by(ftype, filer, name) %>%
+  summarise(wvalue=sum(wvalue, na.rm=TRUE), .groups="drop") %>%
+  mutate(agilev=0, agilab="Total")
+
+dfsums <- bind_rows(dfsums1, dfsums2) %>%
+  arrange(filer, name, agilev)
+
+
+var <- "e02000_neg"  # e00900_neg e00900_zpos e02000_neg e02000_zpos
+dfsums %>%
+  filter(name==var, filer) %>%
+  mutate(wvalue=wvalue / 1000) %>%
+  kable(digits=0, format.args=list(big.mark=","), format="rst")
+
+
+# HT2_AGI_STUBS = [-9e99, 1.0, 10e3, 25e3, 50e3, 75e3, 100e3,
+#                  200e3, 500e3, 1e6, 9e99]
+# 
+# ht2stubs = pd.DataFrame([
+#   [0, 'All income ranges'],
+#   [1, 'Under $1'],
+#   [2, '$1 under $10,000'],
+#   [3, '$10,000 under $25,000'],
+#   [4, '$25,000 under $50,000'],
+#   [5, '$50,000 under $75,000'],
+#   [6, '$75,000 under $100,000'],
+#   [7, '$100,000 under $200,000'],
+#   [8, '$200,000 under $500,000'],
+#   [9, '$500,000 under $1,000,000'],
+#   [10, '$1,000,000 or more']],
+#   columns=['ht2stub', 'ht2range'])
 
 
 
