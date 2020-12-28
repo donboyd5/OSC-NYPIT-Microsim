@@ -1,5 +1,119 @@
 
+# prelims ----
+source(here::here("r", "libraries.r"))
 
+tcout <- r"(C:\programs_python\puf_analysis\ignore\puf_versions\taxcalc_output\)"
+wtdir <- r"(C:\programs_python\puf_analysis\ignore\puf_versions\weights\)"
+
+# weights ----
+w2017 <- read_csv(paste0(wtdir, "national_weights_wide.csv"))
+
+
+# compare puf2017 and 2018, both regrown reweighted, key variables ----
+p2017deffn <- "puf2017_default.parquet"  # default puf in 2017, with filer and pid added
+p2017fn <- "puf2017_regrown.parquet" # the regrown 2017 file
+p2018fn <- "puf2018.parquet"  # the regrown 2017 file advanced to 2018 with default growfactors and no weight changes
+
+vars <- c("pid", "filer", "s006", "c00100", "e00200", "e00300", "e00900", "e02000")
+
+p2017def <- read_parquet(paste0(tcout, p2017deffn), col_select = all_of(vars)) %>% mutate(ftype="p2017")
+p2017 <- read_parquet(paste0(tcout, p2017fn), col_select = all_of(vars)) %>% mutate(ftype="p2017")
+p2018 <- read_parquet(paste0(tcout, p2018fn), col_select = all_of(vars)) %>% mutate(ftype="p2018")
+
+stack <- bind_rows(p2017, p2018) %>%
+  pivot_longer(-c(pid, filer, ftype))
+
+wide <- stack %>%
+  pivot_wider(names_from=ftype)
+
+wide2 <- wide %>%
+  mutate(diff=p2018 - p2017,
+         pdiff=diff / p2017 * 100)
+
+pids <- p2017 %>%
+  filter(e00900 !=0) %>%  # e02000
+  .$pid
+
+wide2 %>%
+  filter(pid %in% pids[1:10]) %>%
+  arrange(name, pid)
+
+# weighted business income and loss values vs IRS ----
+#.. my regrown puf ----
+check2017 <- p2017 %>%
+  filter(filer) %>%
+  select(pid, e00900, e02000) %>%
+  left_join(w2017, by="pid")
+summary(check2017)
+
+wtorder <- setdiff(names(w2017), "pid")
+wtd2017 <- check2017 %>%
+  filter(e00900 != 0 | e02000 !=0) %>%
+  pivot_longer(-c(pid, e00900, e02000), names_to = "wname", values_to = "weight") %>%
+  pivot_longer(-c(pid, wname, weight)) %>%
+  mutate(posneg=ifelse(value > 0, "pos", "neg"),
+         wvalue=value * weight) %>%
+  group_by(name, wname, posneg) %>%
+  summarise(wvalue=sum(wvalue) / 1e9, .groups="drop") %>%
+  mutate(wname=factor(wname, levels=wtorder), year=2017) %>%
+  arrange(name, posneg, wname)
+
+
+var <- "e02000" # e00900 e02000
+wtd2017 %>%
+  filter(name==var) %>%
+  kable(digits=2, format="rst")
+
+#.. default puf ----
+check2017 <- p2017def %>%
+  filter(filer) %>%
+  select(pid, e00900, e02000) %>%
+  left_join(w2017, by="pid")
+summary(check2017)
+
+wtorder <- setdiff(names(w2017), "pid")
+wtd2017 <- check2017 %>%
+  filter(e00900 != 0 | e02000 !=0) %>%
+  pivot_longer(-c(pid, e00900, e02000), names_to = "wname", values_to = "weight") %>%
+  pivot_longer(-c(pid, wname, weight)) %>%
+  mutate(posneg=ifelse(value > 0, "pos", "neg"),
+         wvalue=value * weight) %>%
+  group_by(name, wname, posneg) %>%
+  summarise(wvalue=sum(wvalue, na.rm=TRUE) / 1e9, .groups="drop") %>%
+  mutate(wname=factor(wname, levels=wtorder), year=2017) %>%
+  arrange(name, posneg, wname)
+
+
+var <- "e00900" # e00900 e02000
+wtd2017 %>%
+  filter(name==var) %>%
+  kable(digits=2, format="rst")
+
+
+# now look at 2018 ----
+# get the file and weights used in the OSC report
+oscfn <- "puf2018_weighted.parquet"
+osc2018 <- read_parquet(paste0(tcout, oscfn), col_select = all_of(vars)) %>% mutate(ftype="p2018")
+# s006 is the weight used so we don't need to merge
+
+wtd2018 <- osc2018 %>%
+  filter(e00900 != 0 | e02000 !=0) %>%
+  select(pid, s006, e00900, e02000) %>%
+  pivot_longer(-c(pid, s006)) %>%
+  mutate(posneg=ifelse(value > 0, "pos", "neg"),
+         wvalue=value * s006) %>%
+  group_by(name, posneg) %>%
+  summarise(wvalue=sum(wvalue, na.rm=TRUE) / 1e9, .groups="drop") %>%
+  mutate(year=2018) %>%
+  arrange(name, posneg)
+
+wtd2018 %>%
+  kable(digits=2, format="rst")
+
+
+
+
+# old weighted ----
 sweights_2017 = pd.read_csv(PUFDIR + 'allweights_geo_restricted_qmatrix-ipopt.csv')
 puf2018 = pd.read_parquet(PUFDIR + 'puf2018' + '.parquet', engine='pyarrow')
 

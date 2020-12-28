@@ -24,7 +24,7 @@ get_stabbr <- function(stname){
 html_wrap <- function(s, len){
   # gt uses <br> to break columns in html, rather than \n, so 
   # wrap lines and then replace \n with <br> for column headings
-  wrapped <- str_wrap(s, 15)
+  wrapped <- str_wrap(s, len)
   return(str_replace_all(wrapped, "\\n", "<br>"))
 }
 

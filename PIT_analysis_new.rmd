@@ -350,7 +350,7 @@ synergy <- solosums %>%
 
 dataframe `iitax_filers_unstack` has the main result
 
-```{r}
+```{r solo_wide}
 # make solo_wide table dfsolo
 
 collapse_unstack <- weights_long %>%
@@ -547,7 +547,7 @@ colnames <- mapdf$colname[idx]
 
 data <- df_changes_jct %>%
   filter(agi_stub==99) %>%
-  select(idvars, policy1=all_of(fullnames[1]), policy2=all_of(fullnames[2]), diff, pdiff) %>%
+  select(all_of(idvars), policy1=all_of(fullnames[1]), policy2=all_of(fullnames[2]), diff, pdiff) %>%
   mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
   arrange(stabbr) %>%
   select(stname, policy1, policy2, diff, pdiff)
@@ -609,11 +609,7 @@ for(st in nyus_sort){
 
 ```
 
-
-```{r 2018vs2017_pdiff_byagi_wide, rows.print=20}
-
-tab_title <- "Total federal income tax liability in 2018 calculated under 2017 law and under the TCJA"
-tab_subtitle <- "Percent change from 2017 law to TCJA in 2018"
+```{r prep}
 
 pol_change <- function(wide, policy1, policy2){
   # generic function to take two policies and create a file with changes and percent changes
@@ -645,6 +641,15 @@ data <- solo_wide %>%
   pivot_wider(names_from = stname, values_from = pdiff)
 
 
+```
+
+
+
+```{r 2018vs2017_pdiff_byagi_wide, rows.print=20}
+
+tab_title <- "Total federal income tax liability in 2018 calculated under 2017 law and under the TCJA"
+tab_subtitle <- "Percent change from 2017 law to TCJA in 2018"
+
 tab <- pdiff_wide_table(data, tab_title, tab_subtitle)
 
 gtsave(tab, "2018vs2017_pdiff_byagi_wide_table.png", path = here::here("results"))
@@ -671,16 +676,16 @@ pdata <- data %>%
 nudgex <- function(){
   df <- pdata %>%
     mutate(nudgex=case_when(agi_stub==3 & stabbr=="other" ~ -.1,
-                            agi_stub==3 & stabbr=="CT" ~ -.075,
-                            agi_stub==4 & stabbr %in% c("TX", "FL") ~ -0.075,
+                            agi_stub==3 & stabbr %in% c("CT", "TX", "PA") ~ -.075,
+                            agi_stub==4 & stabbr %in% c("TX", "FL", "NJ") ~ -0.075,
+                            agi_stub==4 & stabbr=="other" ~ .1,
                             agi_stub==5 & stabbr=="other" ~ -.1,
-                            agi_stub==5 & stabbr=="CT" ~ -.075,
-                            agi_stub==6 & stabbr=="TX" ~ -.075,
-                            agi_stub==6 & stabbr=="PA" ~ -.075,
-                            agi_stub==6 & stabbr=="CA" ~ -.075,
-                            agi_stub==6 & stabbr=="NJ" ~ -.075,
-                            agi_stub==7 & stabbr=="FL" ~ -.075,
-                            agi_stub==7 & stabbr=="PA" ~ -.075,
+                            agi_stub==5 & stabbr %in% c("CA", "CT") ~ -.075,
+                            agi_stub==6 & stabbr %in% c("AR", "CA", "NJ", "PA", "TX") ~ -.075,
+                            agi_stub==6 & stabbr=="other" ~ .1,
+                            agi_stub==7 & stabbr %in% c("FL", "PA") ~ -.075,
+                            agi_stub==7 & stabbr=="other" ~ .1,
+                            agi_stub==8 & stabbr=="other" ~ .1,
                             TRUE ~ .075))
   return(df$nudgex)
 }
@@ -694,6 +699,10 @@ nudgey <- function(){
 }
 # nudgey()
 
+capt1 <- "Lowest income group had very large percentage reductions and is excluded to improve readability."
+capt2 <- "Note: states below the zero line had tax increases."
+capt <- paste0("\n", capt1, "\n", capt2)
+
 p <- pdata %>%
   ggplot(aes(x=reorder(agi_label, agi_stub), y=value, label=stabbr, colour=grp)) +
     geom_point(size=0.5) +
@@ -704,17 +713,129 @@ p <- pdata %>%
     scale_colour_manual(values=c("blue", "darkgreen", "#525252")) +
     scale_x_discrete(name=NULL) +
     scale_y_continuous(name="Tax cut (%)") +
-    ggtitle("Tax cut in 2018 as percent of liability under 2017 law",
+    ggtitle("TCJA tax cut in 2018 as percent of liability under 2017 law",
             subtitle="By adjusted gross income range") +
     theme_bw() +
     theme(legend.position = "none") +
-    labs(caption = "\nLowest income group had very large percentage reductions and is excluded to improve readability.") +
+    labs(caption = capt) +
     theme(plot.caption = element_text(hjust = 0, size = 8, colour="#525252"))
+
 ggsave(filename=here::here("results", "taxcut_agirange_scatter.png"), plot=p, width=9, height=6, scale=1)
 # position=position_jitter(width=1,height=1)
 p
 
 ```
+
+
+
+```{r pdiff_agirange_scatter_yreverse}
+# change the y axis so that a tax increase is above the zero line
+
+is.even <- function(x) x %% 2 == 0
+
+pdata <- data %>%
+  left_join(agistubs %>% select(agi_stub, agi_label), by="agi_label") %>%
+  pivot_longer(-c(agi_stub, agi_label)) %>%
+  filter(!agi_stub %in% c(1, 2, 99)) %>%
+  arrange(agi_stub, -value) %>%
+  group_by(agi_stub) %>%
+  mutate(stabbr=get_stabbr(name),
+         agi_label=str_wrap(agi_label, 12),
+         rn=row_number(),
+         xnudge=ifelse(stabbr=="other", .1, .075),
+         xnudge=ifelse(is.even(rn), -xnudge, xnudge),
+         ynudge=0,
+         value=-value,
+         grp=case_when(stabbr=="US" ~ 1,
+                       stabbr=="NY" ~ 2,
+                       TRUE ~ 3),
+         grp=as.factor(grp)) %>%
+  ungroup %>%
+  arrange(agi_stub, -value)
+
+# pdata <- data %>%
+#   left_join(agistubs %>% select(agi_stub, agi_label), by="agi_label") %>%
+#   pivot_longer(-c(agi_stub, agi_label)) %>%
+#   filter(!agi_stub %in% c(1, 2, 99)) %>%
+#   mutate(stabbr=get_stabbr(name),
+#          agi_label=str_wrap(agi_label, 12),
+#          value=-value,
+#          grp=case_when(stabbr=="US" ~ 1,
+#                        stabbr=="NY" ~ 2,
+#                        TRUE ~ 3),
+#          grp=as.factor(grp)) %>%
+#   arrange(agi_stub, -value)
+  
+# nudgex <- function(){
+#   df <- pdata %>%
+#     mutate(nudgex=case_when(agi_stub==3 & stabbr=="other" ~ -.1,
+#                             agi_stub==3 & stabbr %in% c("CT", "TX", "PA") ~ -.075,
+#                             # agi_stub==4 & stabbr %in% c("TX", "FL", "NJ") ~ -0.075,
+#                             agi_stub==4 & stabbr %in% c("TX", "NJ") ~ -0.075,
+#                             agi_stub==4 & stabbr=="other" ~ .1,
+#                             agi_stub==5 & stabbr=="other" ~ -.1,
+#                             agi_stub==5 & stabbr %in% c("CA", "CT") ~ -.075,
+#                             agi_stub==6 & stabbr %in% c("AR", "CA", "NJ", "PA", "TX") ~ -.075,
+#                             agi_stub==6 & stabbr=="other" ~ .1,
+#                             agi_stub==7 & stabbr %in% c("FL", "PA") ~ -.075,
+#                             agi_stub==7 & stabbr=="other" ~ .1,
+#                             agi_stub==8 & stabbr=="other" ~ .1,
+#                             TRUE ~ .075))
+#   return(df$nudgex)
+# }
+# 
+# nudgey <- function(){
+#   df <- pdata %>%
+#     mutate(nudgey=case_when(agi_stub==3 & stabbr %in% c("US") ~ -0.25,
+#                             # agi_stub==3 & stabbr %in% c("CA") ~ -0.25,
+#                             agi_stub==3 & stabbr %in% c("FL") ~ -0.25,
+#                             # agi_stub==4 & stabbr %in% c("FL") ~ +0.25,
+#                             TRUE ~ 0.0))
+#   return(df$nudgey)
+# }
+
+nudgex <- function(){
+  return(pdata$xnudge)
+}
+
+nudgey <- function(){
+  df <- pdata %>%
+    mutate(ynudge=case_when(agi_stub==3 & stabbr %in% c("FL") ~ -0.25,
+                            TRUE ~ ynudge))
+  return(df$ynudge)
+}
+
+
+
+
+capt1 <- "Lowest income group had very large percentage reductions and is excluded to improve readability."
+capt2 <- "Note: states above the zero line had tax increases."
+capt <- paste0("\n", capt1, "\n", capt2)
+
+p <- pdata %>%
+  ggplot(aes(x=reorder(agi_label, agi_stub), y=value, label=stabbr, colour=grp)) +
+    geom_point(size=0.5) +
+    # geom_text(size=2, nudge_x=0.15, check_overlap = TRUE) +
+    geom_text(fontface="bold", nudge_x=nudgex(), nudge_y=nudgey(), size=2, check_overlap = TRUE) +
+    # geom_text_repel(size=2, nudge_x=0.15) +.5
+    geom_hline(yintercept = 0, colour="red", size=0.1) +
+    scale_colour_manual(values=c("blue", "darkgreen", "#525252")) +
+    scale_x_discrete(name=NULL) +
+    scale_y_reverse(name="Tax cut (%)") +
+    ggtitle("TCJA tax cut in 2018 as percent of liability under 2017 law",
+            subtitle="By adjusted gross income range") +
+    theme_bw() +
+    theme(legend.position = "none") +
+    labs(caption = capt) +
+    theme(plot.caption = element_text(hjust = 0, size = 8, colour="#525252"))
+
+ggsave(filename=here::here("results", "taxcut_agirange_scatter_yreverse.png"), plot=p, width=9, height=6, scale=1)
+# position=position_jitter(width=1,height=1)
+p
+
+```
+
+
 
 ## Change in average tax by agi range
 ```{r rows.print=20}
@@ -746,14 +867,14 @@ data <- avgtax %>%
   select(agi_label, stname, diff) %>%
   pivot_wider(names_from = stname, values_from = diff)
 
-tab_title <- "Average federal income tax liability, per return, in 2018: 2017 law, and 2018 tax law"
-tab_subtitle <- "Change in average tax, in dollars, from 2017 law to 2018 law"
+tab_title <- "Average federal income tax liability in 2018, per return, calculated under 2017 law and under the TCJA"
+tab_subtitle <- "Change in average tax, in dollars, from 2017 law to TCJA in 2018"
 tab <- diff_wide_table(data, tab_title, tab_subtitle)
 gtsave(tab, "2018vs2017_dollardiff_byagi_wide_table.png", path = here::here("results"))
 ```
 
 
-```{r avgtax_2017}
+```{r avgtax_2017, eval=FALSE}
 data <- avgtax %>%
   mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
   arrange(stabbr, agi_stub) %>%
@@ -766,7 +887,7 @@ gtsave(tab, "2017_dollarliab_byagi_wide_table.png", path = here::here("results")
 ```
 
 
-```{r avgtax_2018}
+```{r avgtax_2018, eval=FALSE}
 data <- avgtax %>%
   mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
   arrange(stabbr, agi_stub) %>%
@@ -887,6 +1008,10 @@ tmp <- label_map %>%
   add_row(fullname_jct="other", colname="All other provisions combined")
 lablist <- split(tmp$colname, tmp$fullname_jct)
 
+lablist <- split(html_wrap(tmp$colname, 15), tmp$fullname_jct)
+
+
+
 data <- df_changes_jct %>%
   filter(agi_stub==99) %>%
   mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
@@ -894,6 +1019,7 @@ data <- df_changes_jct %>%
   select(stname, all_of(label_map$fullname_jct), other, diff, pdiff) %>%
   relocate(other, .before = `7_law2018`)
   
+(labs <- html_wrap(tmp$colname, 11))
 
 tab <- data %>%
     gt() %>%  tab_header(
@@ -902,10 +1028,21 @@ tab <- data %>%
     ) %>%
     cols_label(
       stname="",
-      diff="Total change",
+      diff=html(html_wrap("Total change", 11)),
       pdiff="% change"
     ) %>%
-  cols_label(.list=lablist) %>%
+  # cols_label(.list=lablist) %>%
+   cols_label(
+     `0_law2017` = html(labs[1]),
+     `1_allrates2018` = html(labs[2]),
+     `2_sd2018` = html(labs[3]),
+     `3_persx2018` = html(labs[4]),
+     `4_qbid2018_limitfalse` = html(labs[5]),
+     `5_salt2018` = html(labs[6]),
+     `6_amt2018` = html(labs[7]),
+     `7_law2018` = html(labs[8]),
+     other = html(labs[9])
+     ) %>%
     fmt_currency(
       columns = c(tmp$fullname_jct, "diff"),
       rows=1,
@@ -934,12 +1071,22 @@ tab <- data %>%
         )
     ) %>%
   tab_spanner(
-      label = "Tax change relative to 2018 law, estimated in left-to-right order, attributable to:",
+      label = "Tax changes moving from 2017 law to the TCJA, estimated in left-to-right sequence, attributable to:",
       columns = c(setdiff(label_map$fullname_jct, c("0_law2017", "7_law2018")), "other")
     ) %>%
     tab_source_note(source_note)
   
-gtsave(tab, "2018vs2017_provisions_bystate_jctstack.png", path = here::here("results"), vwidth=2000, vheight=2000)
+# configure save settings for wide table
+gtsave(tab, "2018vs2017_provisions_bystate_jctstack.png", path = here::here("results"), zoom=1, vwidth=1500)
+
+# gtsave(tab, "2018vs2017_provisions_bystate_jctstack.png", path = here::here("results"))
+# gtsave(tab, "2018vs2017_provisions_bystate_jctstack.png", path = here::here("results"), vwidth=2000, vheight=2000)
+# gtsave(tab, "2018vs2017_provisions_bystate_jctstack.png", path = here::here("results"), vwidth=1200, vheight=2000)
+# this seems to be pretty good for landscape
+# gtsave(tab, "2018vs2017_provisions_bystate_jctstack.png", path = here::here("results"), vwidth=1700, vheight=4000,
+#        zoom=.75, expand = 5)
+# gtsave(tab, "2018vs2017_provisions_bystate_jctstack.pdf", path = here::here("results"))
+# gtsave(tab, "2018vs2017_provisions_bystate_jctstack2.pdf", path = here::here("results"), vwidth=1200, vheight=1000)
 tab
 # vwidth = 992,   vheight = 744,
 
@@ -948,11 +1095,11 @@ tab
 
 ## Changes by income range
 
-```{r us_changes}
+```{r onestate_changes}
 glimpse(df_changes_jct)
 
-
-tab_title <- "United States: Changes from 2017 law for major provisions of the TCJA, measured in sequence"
+st <- "NY"
+tab_title <- paste0(get_stname(st), ": Changes from 2017 law for major provisions of the TCJA, measured in sequence")
 tab_subtitle <- "Impact by income range, millions of dollars"
 
 # create a list of labels for columns
@@ -960,9 +1107,11 @@ tmp <- label_map %>%
   filter(fullname_jct %in% names(df_changes_jct)) %>%
   add_row(fullname_jct="other", colname="All other provisions combined")
 lablist <- split(tmp$colname, tmp$fullname_jct)
+labs
+
 
 data <- df_changes_jct %>%
-  filter(stabbr=="US") %>%
+  filter(stabbr==st) %>%
   arrange(agi_stub) %>%
   select(agi_label, all_of(label_map$fullname_jct), other, diff, pdiff) %>%
   relocate(other, .before = `7_law2018`)
@@ -974,10 +1123,21 @@ tab <- data %>%
     ) %>%
     cols_label(
       agi_label="Adjusted gross income",
-      diff="Total change",
+      diff=html(html_wrap("Total change", 11)),
       pdiff="% change"
     ) %>%
-  cols_label(.list=lablist) %>%
+  # cols_label(.list=lablist) %>%
+   cols_label(
+     `0_law2017` = html(labs[1]),
+     `1_allrates2018` = html(labs[2]),
+     `2_sd2018` = html(labs[3]),
+     `3_persx2018` = html(labs[4]),
+     `4_qbid2018_limitfalse` = html(labs[5]),
+     `5_salt2018` = html(labs[6]),
+     `6_amt2018` = html(labs[7]),
+     `7_law2018` = html(labs[8]),
+     other = html(labs[9])
+     ) %>%
     fmt_currency(
       columns = c(tmp$fullname_jct, "diff"),
       rows=1,
@@ -1006,82 +1166,13 @@ tab <- data %>%
         )
     ) %>%
   tab_spanner(
-      label = "Tax change relative to 2018 law, estimated in left-to-right order, attributable to:",
+      label = "Tax changes moving from 2017 law to the TCJA, estimated in left-to-right sequence, attributable to:",
       columns = c(setdiff(label_map$fullname_jct, c("0_law2017", "7_law2018")), "other")
     ) %>%
     tab_source_note(source_note)
   
-gtsave(tab, "2018vs2017_provisions_us_byagi_jctstack.png", path = here::here("results"), vwidth=2000, vheight=2000)
-tab
-# vwidth = 992,   vheight = 744,
-
-```
-
-
-```{r ny_changes}
-glimpse(df_changes_jct)
-
-
-tab_title <- "New York: Changes from 2017 law for major provisions of the TCJA, measured in sequence"
-tab_subtitle <- "Impact by income range, millions of dollars"
-
-# create a list of labels for columns
-tmp <- label_map %>%
-  filter(fullname_jct %in% names(df_changes_jct)) %>%
-  add_row(fullname_jct="other", colname="All other provisions combined")
-lablist <- split(tmp$colname, tmp$fullname_jct)
-
-data <- df_changes_jct %>%
-  filter(stabbr=="NY") %>%
-  arrange(agi_stub) %>%
-  select(agi_label, all_of(label_map$fullname_jct), other, diff, pdiff) %>%
-  relocate(other, .before = `7_law2018`)
-
-tab <- data %>%
-    gt() %>%  tab_header(
-      title = tab_title,
-      subtitle = tab_subtitle
-    ) %>%
-    cols_label(
-      agi_label="Adjusted gross income",
-      diff="Total change",
-      pdiff="% change"
-    ) %>%
-  cols_label(.list=lablist) %>%
-    fmt_currency(
-      columns = c(tmp$fullname_jct, "diff"),
-      rows=1,
-      decimals = 0,
-      scale_by = 1e-6,
-      suffixing = FALSE
-    ) %>%
-    fmt_number(
-      columns = c(tmp$fullname_jct, "diff"),
-      rows=2:nrow(data),
-      decimals = 0,
-      scale_by = 1e-6,
-      suffixing = FALSE
-    ) %>%
-    fmt_percent(
-      columns="pdiff",
-      scale_values = FALSE,
-      decimals = 1
-    ) %>% 
-    tab_style(
-      style = list(
-        cell_fill(color = "#f7f7f7")
-      ),
-      locations = cells_body(
-        rows = seq(1, nrow(data), 2)
-        )
-    ) %>%
-  tab_spanner(
-      label = "Tax change relative to 2018 law, estimated in left-to-right order, attributable to:",
-      columns = c(setdiff(label_map$fullname_jct, c("0_law2017", "7_law2018")), "other")
-    ) %>%
-    tab_source_note(source_note)
-  
-gtsave(tab, "2018vs2017_provisions_nybyagi_jctstack.png", path = here::here("results"), vwidth=2000, vheight=2000)
+# gtsave(tab, "2018vs2017_provisions_us_byagi_jctstack.png", path = here::here("results"), vwidth=2000, vheight=2000)
+gtsave(tab, paste0("2018vs2017_provisions_", st, "_byagi_jctstack.png"), path = here::here("results"), zoom=1, vwidth=1500)
 tab
 # vwidth = 992,   vheight = 744,
 
@@ -1092,7 +1183,7 @@ tab
 
 ```{r}
 # get the data
-(files <- list.files(solov2018dir))
+(files <- list.files(solo2018dir))
 
 f <- function(file, dir, keepvars){
   policy <- str_remove(file, ".parquet")
@@ -1105,7 +1196,7 @@ f <- function(file, dir, keepvars){
 }
 
 keepvars <- c("pid", "c00100", "iitax")
-policy_vs2018 <- map_dfr(files, f, solov2018dir, keepvars)
+policy_vs2018 <- map_dfr(files, f, solo2018dir, keepvars)
 
 count(policy_vs2018, policy)
 # [1] "amt2017_vs_law2018xQlimit"
@@ -1233,7 +1324,7 @@ lablist <- split(col_labels, col_names)
 # [11,] "amt2017_vs_law2018xQlimit_NY"         "NY"      
 # [12,] "amt2017_vs_law2018xQlimit_gap"        "gap"
 
-tab_title <- "TCJA and TCJA with selected provisions removed"
+tab_title <- "Full TCJA compared to TCJA with selected provisions removed"
 tab_subtitle <- "Percent change in federal income tax liability from 2017 law, in 2018"
 tab <- data %>%
     gt() %>%  tab_header(
@@ -1291,7 +1382,6 @@ gtsave(tab, "2018vs2017_selected_TCJAprovisions_removed.png", path = here::here(
 tab
 
 
-
 ```
 
 
@@ -1318,7 +1408,7 @@ cbind(col_names, col_labels)
 lablist <- split(col_labels, col_names)
 
 
-tab_title <- "TCJA and TCJA with SALT cap removed"
+tab_title <- "Full TCJA compared to TCJA with SALT cap removed"
 tab_subtitle <- "Percent change in federal income tax liability from 2017 law, in 2018"
 tab <- data %>%
     gt() %>%  tab_header(
@@ -1372,22 +1462,20 @@ tab
 
 ```{r}
 # create table for removing salt from tcja
-data <- v2018_analysis %>%
-  filter(policy=="salt2017_vs_law2018xQlimit") %>%
-  mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
-  arrange(stabbr, agi_stub) %>%
-  select(stname, agi_label, pdiff) %>%
-  pivot_wider(names_from = stname, values_from = pdiff)
-
-
-tab_title <- "abc"
-tab_subtitle <- "def"
-pdiff_wide_table(data, tab_title, tab_subtitle)
+# data <- v2018_analysis %>%
+#   filter(policy=="salt2017_vs_law2018xQlimit") %>%
+#   mutate(stabbr=factor(stabbr, levels=usny_sort)) %>%
+#   arrange(stabbr, agi_stub) %>%
+#   select(stname, agi_label, pdiff) %>%
+#   pivot_wider(names_from = stname, values_from = pdiff)
+# 
+# 
+# tab_title <- "abc"
+# tab_subtitle <- "def"
+# pdiff_wide_table(data, tab_title, tab_subtitle)
 
 
 ```
-
-
 
 
 
